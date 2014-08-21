@@ -1,0 +1,22 @@
+{
+  "name": "sap-mailin",
+  "version": "0.0.1",
+  "description": "Makes the ERP RFC available via SMTP",
+  "main": "index.js",
+  "scripts": {
+    "start": "sudo iptables -t nat -A PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 2525 && node ./app.js; sudo iptables -t nat -D PREROUTING -p tcp --dport 25 -j REDIRECT --to-port 2525",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "sap",
+    "erp",
+    "smtp"
+  ],
+  "author": "Alfhan",
+  "license": "ISC",
+  "dependencies": {
+    "mailin": "^0.1.0",
+    "mkdirp": "^0.5.0",
+    "sap-zerorpc": "^0.0.1"
+  }
+}
