@@ -99,7 +99,7 @@ mailin.on('message', function (message) {
           // Waktu nya untuk melakukan Remote-Function-Call ke ABAP.
           sapClient.call(funcName, funcParams, function(err, res) {
             if(err) { return console.log(err); }
-            console.log("RFC Response: ");
+            console.log("SAP-RFC Response: ");
             console.log(res);
           });
         });
