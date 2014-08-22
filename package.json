@@ -15,6 +15,7 @@
   "author": "Alfhan",
   "license": "ISC",
   "dependencies": {
+    "async": "^0.9.0",
     "mailin": "^0.1.0",
     "mkdirp": "^0.5.0",
     "sap-zerorpc": "^0.0.1"

@@ -1,0 +1,80 @@
+Received: by mail-pd0-f172.google.com with SMTP id y13so13871215pdi.31
+        for <DEV@sap.lmu.co.id>; Thu, 21 Aug 2014 08:25:58 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=lmu.co.id; s=google;
+        h=content-type:mime-version:content-transfer-encoding:message-id:date
+         :subject:from:in-reply-to:references:to;
+        bh=fClqzelxF9X3zJSxL2XoAEtKTh3UeRYzSg3WzlHF+0w=;
+        b=cvgtQdCpzbfQR9EtQWblWvTBr58+8db3yFE89OPGMNkJSib1jzkYT9JRfN5gQLAhol
+         C3V7ToN8LxUgVtpiGtCuC+W/XwvJVsZuPAR6rT3spwOkdBX/qc23NQ0C/Ltw8HfsjlcB
+         c3nQvxo+WAp1hTKjIKvt8FdsAXtkbxKy1ijWM=
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20130820;
+        h=x-gm-message-state:content-type:mime-version
+         :content-transfer-encoding:message-id:date:subject:from:in-reply-to
+         :references:to;
+        bh=fClqzelxF9X3zJSxL2XoAEtKTh3UeRYzSg3WzlHF+0w=;
+        b=GHrNxd5G0uxC4Htmi9QErcJ+coBNHD1boJPw5lXwi8SoLEwftpfm27x7CVbzTjYKj2
+         5KzgzhTWJaWJMtXf+KBAYXVLuZA1/IkciA48YnkfFirjXemFUG5gJe8+drusPiloCPnJ
+         jPSTUldIsNJf1tSn/E0R/Gd+3EEH0cxWIarqfZI4X7/DD5QNwdhvTqsoUgx8xqvJL2Jm
+         vCwTu+3THJm7K2UlAnSPb/ARZzTMaC2qiX6oAsWotoIfNQEhgCFsJWwNyxDrqON5IDxK
+         joy+ohx6xQE3Ys6PIV30NVt1xSb6wHMrX0gHZUp3xAqOn+s+sCL2u9eCliCLrKUfhc3C
+         2fgw==
+X-Gm-Message-State: ALoCoQlV7qC2F74k90FoaVLtQEDG+eWb9pmgDtltwrSp2MGzBTy6MKNWyo3FA9YSCxg74LJdmmsh8WlrPqhWIsLJosr8B348VOSqT7YY6QFJbm2SEk+S18uoQRV/F/76Jt6dd843vdx/
+X-Received: by 10.70.38.4 with SMTP id c4mr69205762pdk.108.1408634757971;
+        Thu, 21 Aug 2014 08:25:57 -0700 (PDT)
+Return-Path: <heri.sim@lmu.co.id>
+Received: from [127.0.0.1] ([36.70.157.221])
+        by mx.google.com with ESMTPSA id np15sm39227372pdb.84.2014.08.21.08.25.54
+        for <DEV@sap.lmu.co.id>
+        (version=TLSv1 cipher=ECDHE-RSA-RC4-SHA bits=128/128);
+        Thu, 21 Aug 2014 08:25:57 -0700 (PDT)
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: quoted-printable
+X-Mailer: BlackBerry Email (10.2.1.3247)
+Message-ID: <20140821152554.5959826.6784.3440@lmu.co.id>
+Date: Thu, 21 Aug 2014 22:25:54 +0700
+Subject: ping
+From: Heri Sim <heri.sim@lmu.co.id>
+In-Reply-To: <20140821152357.5959826.12487.3438@lmu.co.id>
+References: 
+ <20140821152357.5959826.12487.3438@lmu.co.id>
+To: DEV@sap.lmu.co.id
+
+<html><head></head><body data-blackberry-caret-color=3D"#00a8df" style=3D"b=
+ackground-color: rgb(255, 255, 255); line-height: initial;"><div style=3D"w=
+idth: 100%; font-size: initial; font-family: Calibri, 'Slate Pro', sans-ser=
+if; color: rgb(31, 73, 125); text-align: initial; background-color: rgb(255=
+, 255, 255);"><br name=3D"BB10" caretmarkerset=3D"INVALID" class=3D"markedF=
+orCaretMarkerRemoval"></div>                                               =
+                                                                           =
+           <div style=3D"width: 100%; font-size: initial; font-family: Cali=
+bri, 'Slate Pro', sans-serif; color: rgb(31, 73, 125); text-align: initial;=
+ background-color: rgb(255, 255, 255);"><br style=3D"display:initial"></div=
+>                                                                          =
+                                                           <div style=3D"fo=
+nt-size: initial; font-family: Calibri, 'Slate Pro', sans-serif; color: rgb=
+(31, 73, 125); text-align: initial; background-color: rgb(255, 255, 255);">=
+BlackBerry 10=E3=81=8B=E3=82=89=E9=80=81=E4=BF=A1=E6=B8=88=E3=81=BF=E3=81=
+=A7=E3=81=99=E3=80=82Please excuse my brevity.</div>                       =
+                                                                           =
+                                                                           =
+           <table width=3D"100%" style=3D"background-color:white;border-spa=
+cing:0px;"> <tbody><tr><td colspan=3D"2" style=3D"font-size: initial; text-=
+align: initial; background-color: rgb(255, 255, 255);">                    =
+                          <div id=3D"_persistentHeader" style=3D"border-sty=
+le: solid none none; border-top-color: rgb(181, 196, 223); border-top-width=
+: 1pt; padding: 3pt 0in 0in; font-family: Tahoma, 'BB Alpha Sans', 'Slate P=
+ro'; font-size: 10pt;">  <div><b>From: </b>Heri Sim</div><div><b>Sent: </b>=
+Kamis, 21 Agustus 2014 10.24 PM</div><div><b>To: </b>DEV@sap.lmu.co.id</div=
+><div><b>Subject: </b>ping</div></div></td></tr></tbody></table><div style=
+=3D"border-style: solid none none; border-top-color: rgb(186, 188, 209); bo=
+rder-top-width: 1pt; font-size: initial; text-align: initial; background-co=
+lor: rgb(255, 255, 255);"></div><br><div id=3D"_originalContent" style=3D""=
+><meta http-equiv=3D"Content-Type" content=3D"text/plain;"><style> body {  =
+font-family: "Calibri","Slate Pro","sans-serif"; color:#262626 }</style>  <=
+div><br></div><div>Test</div><div><br></div><div>BlackBerry 10=E3=81=8B=E3=
+=82=89=E9=80=81=E4=BF=A1=E6=B8=88=E3=81=BF=E3=81=A7=E3=81=99=E3=80=82Please=
+ excuse my brevity.</div>
+<br><!--end of _originalContent --></div></body></html>

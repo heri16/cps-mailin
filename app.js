@@ -1,15 +1,15 @@
 var mailin = require('mailin');
 var mkdirp = require('mkdirp');
+var async = require('async');
 
 var fs = require('fs');
 
-var sapzrpc = require('sap-zerorpc');
+var zerosap = require('sap-zerorpc');
 
 
 /* Config-variables */
 
 /* System variables */
-var sidClientPool = [];
 
 
 /* Event emitted when a connection with the Mailin smtp server is initiated. */
@@ -48,7 +48,7 @@ mailin.on('message', function (message) {
   	var match = emailRegexp.exec(eachTo.address);
   	return match[1];
   });
-  console.log(systemIds);
+  console.log("SIDs: " + systemIds);
   
   // Melakukan untuk setiap systemId (e.g. DEV/PRD)
   systemIds.forEach(function(systemId, idx) {
@@ -61,36 +61,51 @@ mailin.on('message', function (message) {
       // Tidak ada error, maka...
       
       // Mendapatkan semua attachments
-      message.attachments.forEach(function(eachAttachment, idx) {
+      async.mapLimit(message.attachments, 2, function(eachAttachment, cb) {
         // Menulis setiap attachment ke dalam subfolder (setiap systemId)
         var filePath = folderPath + '/' + eachAttachment.fileName;
         fs.writeFile(filePath, eachAttachment.content, function(err) {
-          if (err) { return console.log(err); }
+          if (err) { cb(err); return; }
           // Tidak ada error, maka...
           
-          console.log('OK: ' + filePath);
+          // Melepas memory yang terpakai
+          delete eachAttachment.content;
 
+          console.log('Attachment: ' + filePath);
+          cb(null, filePath);
         });
+
+      }, function(err, filePaths) {
+        // Menyambung ke SAP melalui ZeroRPC
+        var sapClient = zerosap.getSapClient(systemId);
+
+        // Melakukan upload ke SAP berdasarkan setiap systemId
+        sapClient.uploadFiles(filePaths, function(err, res) {
+          if(err) { return console.log(err); }
+
+          // XML Files successfully uploaded.
+          console.log("Checksums: " + res);
+
+          // Mentafsirkan command yang di inginkan
+          var funcName = message.subject.match(/:?\s?(\w+)$/)[1];
+          try {
+            var jsonString = message.text.match(/({[\s\S]+})/)[1];
+            var funcParams = JSON.parse(jsonString);
+          } catch(ex) {
+            var funcParams = {};
+            console.log(ex);
+          }
+
+          // Waktu nya untuk melakukan Remote-Function-Call ke ABAP.
+          sapClient.call(funcName, funcParams, function(err, res) {
+            if(err) { return console.log(err); }
+            console.log("RFC Response: ");
+            console.log(res);
+          });
+        });
+
       });
     });
-
-    // Menyambung ke SAP melalui ZeroRPC
-    var sapClient= sapzrpc.getSapClient(systemId);
-
-    // Melakukan upload ke SAP berdasarkan setiap systemId
-    var uploadFilePaths = message.attachments.map( function(each) { return 'data/' + systemId + '/' + each.fileName; });
-    sapClient.uploadFiles(uploadFilePaths, function(err, res) {
-       if(err) return console.log(err);
-       
-       // XML Files successfully uploaded.
-       // Waktu nya untuk melakukan Remote-Function-Call ke ABAP.
-       var funcName = message.subject;
-       sapClient.call(funcName, function(err, res) {
-           if(err) return console.log(err);
-           console.log(res);
-       });
-    });
-
   });
   
   
