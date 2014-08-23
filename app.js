@@ -1,4 +1,5 @@
 var mailin = require('mailin');
+var nodemailer = require('nodemailer');
 var mkdirp = require('mkdirp');
 var async = require('async');
 
@@ -9,8 +10,42 @@ var zerosap = require('sap-zerorpc');
 
 /* Config-variables */
 
+
 /* System variables */
 
+// Nodemailer Transporter to smtp-relay.gmail.com
+var replyTransporter = nodemailer.createTransport({
+  host: 'smtp-relay.gmail.com',
+  port: 465,
+  secure: true,
+  tls: {
+    ca: [
+      fs.readFileSync('certs/d83c1a7f4d0446bb2081b81a1670f8183451ca24.pem'), // Google Internet Authority G2
+      fs.readFileSync('certs/710b673d8cccc305993d05edb5ddab1cef3ef464.pem'), // GeoTrust Global CA
+      fs.readFileSync('certs/d23209ad23d314232174e40d7f9d62139786633a.pem') // Equifax Secure Certificate Authority
+    ],
+    rejectUnauthorized: true
+  }
+});
+
+// Nodemailer Function to assist in replying to emails
+function replyToEmail(message, response, cb) {
+  if (!cb) {
+    cb = function(err, res) {
+      console.error(err ? err : res);
+    };
+  }
+ 
+  var mailOptions = {
+    from: message.envelopeTo,
+    to: message.envelopeFrom,
+    inReplyTo: message.messageId,
+    subject: 'Re: ' + message.subject,
+    text: ( (typeof response === 'string' || response instanceof String) ? response : JSON.stringify(response, null, 2) )
+  };
+
+  replyTransporter.sendMail(mailOptions, cb);
+}
 
 /* Event emitted when a connection with the Mailin smtp server is initiated. */
 mailin.on('startMessage', function (messageInfo) {
@@ -19,7 +54,7 @@ mailin.on('startMessage', function (messageInfo) {
       to: 'someaddress@yourdomain.com',
       connectionId: 't84h5ugf'
   }; */
-  console.log(messageInfo);
+  //console.info(messageInfo);
 });
 
 /* Event emitted after a message was received and parsed.
@@ -48,16 +83,17 @@ mailin.on('message', function (message) {
   	var match = emailRegexp.exec(eachTo.address);
   	return match[1];
   });
-  console.log("SIDs: " + systemIds);
+  console.info("SIDs: " + systemIds);
   
   // Melakukan untuk setiap systemId (e.g. DEV/PRD)
   systemIds.forEach(function(systemId, idx) {
-    //console.log(systemId);
+    //console.info(systemId);
+    replyToEmail(message, "Processing SID: " + systemId, function() {});
 
     // Membuat subfolder baru berdasarkan setiap systemId
     var folderPath = 'data/' + systemId;
     mkdirp(folderPath, function(err) {
-      if (err) { return console.log(err); }
+      if (err) { console.error(err); replyToEmail(message, err); return; }
       // Tidak ada error, maka...
       
       // Mendapatkan semua attachments
@@ -71,36 +107,80 @@ mailin.on('message', function (message) {
           // Melepas memory yang terpakai
           delete eachAttachment.content;
 
-          console.log('Attachment: ' + filePath);
+          console.info('Attachment Saved: ' + filePath);
           cb(null, filePath);
         });
 
       }, function(err, filePaths) {
+        if (err) { console.error(err); replyToEmail(message, err); return; }
+
         // Menyambung ke SAP melalui ZeroRPC
         var sapClient = zerosap.getSapClient(systemId);
+        if (!sapClient) { console.error("Unknown SAP SID: " + systemId); replyToEmail(message, "Invalid SID: " + systemId); return; }
 
         // Melakukan upload ke SAP berdasarkan setiap systemId
         sapClient.uploadFiles(filePaths, function(err, res) {
-          if(err) { return console.log(err); }
+          if (err) { console.error(err); replyToEmail(message, err); return; }
 
           // XML Files successfully uploaded.
-          console.log("Checksums: " + res);
+          if (res && res.length > 0) {
+            console.info("Upload Checksums: ");
+            res.forEach(function(validity, idx) {
+              console.info('  ' + validity + ': ' + filePaths[idx]);
+            });
+          }
 
           // Mentafsirkan command yang di inginkan
           var funcName = message.subject.match(/:?\s?(\w+)$/)[1];
+          var funcParams = {};
+          var jsonString = '';
           try {
-            var jsonString = message.text.match(/({[\s\S]+})/)[1];
-            var funcParams = JSON.parse(jsonString);
+            var match = message.text.match(/({[\s\S]+})/);
+            if (match) {
+              jsonString = match[1].replace(/(\r\n|\n|\r)/gm, '');
+              funcParams = JSON.parse(jsonString);
+            }
           } catch(ex) {
-            var funcParams = {};
-            console.log(ex);
+            var errorMsg = "Invalid JSON: " + jsonString + '\n\n' + ex.toString();
+            console.error(errorMsg);
+            replyToEmail(message, errorMsg);
+            return;
           }
 
           // Waktu nya untuk melakukan Remote-Function-Call ke ABAP.
           sapClient.call(funcName, funcParams, function(err, res) {
-            if(err) { return console.log(err); }
-            console.log("SAP-RFC Response: ");
-            console.log(res);
+            if (err) { 
+              console.error("SAP-RFC Error: ");
+              console.error(err);
+              replyToEmail(message, err);
+              return;
+            }
+            // Tidak ada error, maka...
+
+            console.info("SAP-RFC Response: ");
+            console.info(res);
+
+            // Email balik RFC-response nya ke pengirim email.
+            replyToEmail(message, res, function(err, info) {
+              if (err) {
+                console.error("Email-Reply Error: ");
+                console.error(err);
+                return;
+              }
+              // Tidak ada error, maka...
+              
+              console.info("Email-Reply Server: " + info.response);
+
+              if (info.rejected && info.rejected.length > 0) {
+                console.info("Email-Reply Rejected: " + info.rejected);
+              }
+
+              if (info.accepted && info.accepted.length > 0) {
+                console.info("Email-Reply Accepted: " + info.accepted);
+              }
+
+              // END
+            });
           });
         });
 
@@ -110,6 +190,7 @@ mailin.on('message', function (message) {
   
   
 });
+
 
 /* Start the Mailin server. The available options are: 
  *  options = {
