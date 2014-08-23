@@ -5,7 +5,7 @@ var async = require('async');
 
 var fs = require('fs');
 
-var zerosap = require('sap-zerorpc');
+var zerosap = require('zerosap');
 
 
 /* Config-variables */
