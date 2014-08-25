@@ -115,7 +115,7 @@ mailin.on('message', function (message) {
         if (err) { console.error(err); replyToEmail(message, err); return; }
 
         // Menyambung ke SAP melalui ZeroRPC
-        var sapClient = zerosap.getSapClient(systemId);
+        var sapClient = zerosap.getSapClient(systemId, '10.0.1.230', 4242);
         if (!sapClient) { console.error("Unknown SAP SID: " + systemId); replyToEmail(message, "Invalid SID: " + systemId); return; }
 
         // Melakukan upload ke SAP berdasarkan setiap systemId
