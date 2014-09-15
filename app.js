@@ -79,6 +79,7 @@ mailin.on('message', function (message) {
   //console.log(systemId);
   
   // Mendapatkan semua SAP System Ids
+  if (!message.to) { message.to = []; } 
   var systemIds = message.to.map(function(eachTo, idx) {
   	var match = emailRegexp.exec(eachTo.address);
   	return match[1];
@@ -202,7 +203,7 @@ mailin.on('message', function (message) {
  * Here disable the webhook posting so that you can do what you want with the
  * parsed message. */
 mailin.start({
-  port: 2525,
+  port: 2500,
   disableWebhook: true // Disable the webhook posting.
 });
 
