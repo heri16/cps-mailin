@@ -2,14 +2,20 @@ var mailin = require('mailin');
 var nodemailer = require('nodemailer');
 var mkdirp = require('mkdirp');
 var async = require('async');
+var edge = require('edge');
 
 var fs = require('fs');
 
-var zerosap = require('zerosap');
-
+var pstools = require('./lib/pstools')
 
 /* Config-variables */
-
+var SIDs = {
+  "3001": {
+    host: "28.139.40.15",
+    username: "Mailin",
+    passwordFile: "data\\3001.pem"
+  } 
+};
 
 /* System variables */
 
@@ -115,75 +121,36 @@ mailin.on('message', function (message) {
       }, function(err, filePaths) {
         if (err) { console.error(err); replyToEmail(message, err); return; }
 
-        // Menyambung ke SAP melalui ZeroRPC
-        var sapClient = zerosap.getSapClient(systemId, '10.0.1.230', 4242);
-        if (!sapClient) { console.error("Unknown SAP SID: " + systemId); replyToEmail(message, "Invalid SID: " + systemId); return; }
+        // Menyambung ke POS melalui PsTools
+        var payload = {
+          sources: filePaths,
+          destination: "d$\\MT\\Data"
+        };
 
-        // Melakukan upload ke SAP berdasarkan setiap systemId
-        sapClient.uploadFiles(filePaths, function(err, res) {
-          if (err) { console.error(err); replyToEmail(message, err); return; }
+        var SID = SIDs[systemId];
+        for (var prop in SID) { payload[prop] = SID[prop]; }
 
-          // XML Files successfully uploaded.
-          if (res && res.length > 0) {
-            console.info("Upload Checksums: ");
-            res.forEach(function(validity, idx) {
-              console.info('  ' + validity + ': ' + filePaths[idx]);
-            });
-          }
+        pstools.copyFileToRemote(payload, function (err, results) {
+          if (err) { console.log(err); return; }
+          results.forEach(function(res) {
+            console.log(res);  
+          });
 
-          // Mentafsirkan command yang di inginkan
-          var funcName = message.subject.match(/:?\s?(\w+)$/)[1];
-          var funcParams = {};
-          var jsonString = '';
-          try {
-            var match = message.text.match(/({[\s\S]+})/);
-            if (match) {
-              jsonString = match[1].replace(/(\r\n|\n|\r)/gm, '');
-              funcParams = JSON.parse(jsonString);
-            }
-          } catch(ex) {
-            var errorMsg = "Invalid JSON: " + jsonString + '\n\n' + ex.toString();
-            console.error(errorMsg);
-            replyToEmail(message, errorMsg);
-            return;
-          }
+          var payload = {
+            cmd: "D:\\MtTransferAll.exe"
+          };
 
-          // Waktu nya untuk melakukan Remote-Function-Call ke ABAP.
-          sapClient.call(funcName, funcParams, function(err, res) {
-            if (err) { 
-              console.error("SAP-RFC Error: ");
-              console.error(err);
-              replyToEmail(message, err);
-              return;
-            }
-            // Tidak ada error, maka...
+          for (var prop in SID) { payload[prop] = SID[prop]; }
 
-            console.info("SAP-RFC Response: ");
-            console.info(res);
-
-            // Email balik RFC-response nya ke pengirim email.
-            replyToEmail(message, res, function(err, info) {
-              if (err) {
-                console.error("Email-Reply Error: ");
-                console.error(err);
-                return;
-              }
-              // Tidak ada error, maka...
-              
-              console.info("Email-Reply Server: " + info.response);
-
-              if (info.rejected && info.rejected.length > 0) {
-                console.info("Email-Reply Rejected: " + info.rejected);
-              }
-
-              if (info.accepted && info.accepted.length > 0) {
-                console.info("Email-Reply Accepted: " + info.accepted);
-              }
-
-              // END
+          pstools.execAtRemote(payload, function (err, results) {
+            if (err) { console.log(err); return; }
+            results.forEach(function(res) {
+              console.log(res);  
             });
           });
         });
+
+        // END
 
       });
     });
