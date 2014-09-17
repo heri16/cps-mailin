@@ -1,6 +1,7 @@
 var mailin = require('mailin');
 var nodemailer = require('nodemailer');
 var mkdirp = require('mkdirp');
+var unzip = require('unzip');
 var async = require('async');
 var edge = require('edge');
 
@@ -14,10 +15,58 @@ var SIDs = {
     host: "28.139.40.15",
     username: "Mailin",
     passwordFile: "data\\3001.pem"
-  } 
+  },
+  "jakarta": {
+    host: "10.0.5.115",
+    username: "Mailin",
+    passwordFile: "data\\3001.pem"
+  },
 };
 
 /* System variables */
+
+var funcNames = {};
+funcNames.MasterXmlImport = function(systemId, filePaths, cb) {
+        if (!SIDs[systemId]) { return; }
+        var SID = SIDs[systemId];
+
+        // Menyambung ke Accurate Client melalui PsTools
+        var payload = { sources: filePaths, destination: "c$\\Accurate\\Data\\Import" };
+        for (var prop in SID) { payload[prop] = SID[prop]; }
+
+        pstools.copyFileToRemote(payload, function (err, results) {
+          if (err) { console.log(err); return; }
+          results.forEach(function(res) {
+            console.log(res);  
+          });
+
+          var payload = { cmd: "C:\\Accurate\\AccXmlImport.exe" };
+          for (var prop in SID) { payload[prop] = SID[prop]; }
+
+          pstools.execAtRemote(payload, cb);
+        });
+};
+
+funcNames.PluCsvImport = function(systemId, filePaths, cb) {
+        if (!SIDs[systemId]) { return; }
+        var SID = SIDs[systemId];
+
+        // Menyambung ke RENE Admin Client melalui PsTools
+        var payload = { sources: filePaths, destination: "d$\\MT\\Data" };
+        for (var prop in SID) { payload[prop] = SID[prop]; }
+
+        pstools.copyFileToRemote(payload, function (err, results) {
+          if (err) { console.log(err); return; }
+          results.forEach(function(res) {
+            console.log(res);  
+          });
+
+          var payload = { cmd: "D:\\MT\\MtTransferAll.exe" };
+          for (var prop in SID) { payload[prop] = SID[prop]; }
+
+          pstools.execAtRemote(payload, cb);
+        });
+};
 
 // Nodemailer Transporter to smtp-relay.gmail.com
 var replyTransporter = nodemailer.createTransport({
@@ -115,43 +164,71 @@ mailin.on('message', function (message) {
           delete eachAttachment.content;
 
           console.info('Attachment Saved: ' + filePath);
-          cb(null, filePath);
+
+          // Extract ke folder kalau zip file
+          if (/\.zip$/.test(eachAttachment.fileName)) {
+            var unzipParser = fs.createReadStream(filePath).pipe(unzip.Parse());
+            var filePaths = [];
+            unzipParser.on('entry', function (entry) {
+              if (entry.type === 'File') {
+                var entryFilePath = folderPath + '/' + entry.path;
+                entry.pipe(fs.createWriteStream(entryFilePath)).on('finish', function() {
+                  console.info('Attachment ZipEntry: ' + entryFilePath);
+                  filePaths.push(entryFilePath);
+                });
+              }
+            });
+            unzipParser.on('close', function() {
+              cb(null, filePaths);
+            });
+
+          } else {
+            cb(null, filePath);
+          }
         });
 
       }, function(err, filePaths) {
         if (err) { console.error(err); replyToEmail(message, err); return; }
 
-        // Menyambung ke POS melalui PsTools
-        var payload = {
-          sources: filePaths,
-          destination: "d$\\MT\\Data"
-        };
+        // Flatten an array of arrays
+        filePaths = filePaths.reduce(function(a, b) {
+          return a.concat(b);
+        });
 
-        var SID = SIDs[systemId];
-        for (var prop in SID) { payload[prop] = SID[prop]; }
+        var funcName = message.subject.match(/:?\s?(\w+)$/)[1];
+        if (!funcNames[funcName]) { return; }
 
-        pstools.copyFileToRemote(payload, function (err, results) {
+        funcNames[funcName](systemId, filePaths, function (err, results) {
           if (err) { console.log(err); return; }
+
           results.forEach(function(res) {
             console.log(res);  
           });
 
-          var payload = {
-            cmd: "D:\\MtTransferAll.exe"
-          };
+          var replyBody = results.join('\n');
 
-          for (var prop in SID) { payload[prop] = SID[prop]; }
+          // Email balik RFC-response nya ke pengirim email.
+          replyToEmail(message, replyBody, function(err, info) {
+            if (err) {
+              console.error("Email-Reply Error: ");
+              console.error(err);
+              return;
+            }
+            // Tidak ada error, maka...
 
-          pstools.execAtRemote(payload, function (err, results) {
-            if (err) { console.log(err); return; }
-            results.forEach(function(res) {
-              console.log(res);  
-            });
+            console.info("Email-Reply Server: " + info.response);
+
+            if (info.rejected && info.rejected.length > 0) {
+              console.info("Email-Reply Rejected: " + info.rejected);
+            }
+
+            if (info.accepted && info.accepted.length > 0) {
+              console.info("Email-Reply Accepted: " + info.accepted);
+            }
+
+            // END
           });
         });
-
-        // END
-
       });
     });
   });
