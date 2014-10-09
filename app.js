@@ -220,9 +220,11 @@ mailin.on('message', function (message) {
 
             /*
             // Disabled due to High CPU Usage
+            var parser = unzip.Parse()
             fs.createReadStream(filePath).pipe(
-               unzip.Parse()
+               parser
             ).on('finish', function() {
+              parser.end();
               setImmediate(cb, null, filePaths);
 
             }).on('entry', function (entry) {
