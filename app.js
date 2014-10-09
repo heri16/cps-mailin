@@ -12,9 +12,14 @@ var pstools = require('./lib/pstools')
 /* Config-variables */
 var SIDs = {
   "3001": {
-    host: "28.139.40.15",
+    host: "30.139.40.15",
     username: "Mailin",
     passwordFile: "data\\3001.pem"
+  },
+  "3002": {
+    host: "30.188.136.245",
+    username: "Mailin",
+    passwordFile: "data\\3002.pem"
   },
   "jakarta": {
     host: "10.0.5.115",
@@ -41,6 +46,33 @@ funcNames.MasterXmlImport = function(systemId, filePaths, cb) {
           });
 
           var payload = { cmd: "C:\\Accurate\\AccXmlImport.exe" };
+          for (var prop in SID) { payload[prop] = SID[prop]; }
+
+          pstools.execAtRemote(payload, cb);
+        });
+};
+
+funcNames.AdjustXmlImport = function(systemId, filePaths, cb) {
+        if (!SIDs[systemId]) { return; }
+        var SID = SIDs[systemId];
+
+        // Menyambung ke RENE Admin Client melalui PsTools
+        var payload = { sources: filePaths, destination: "d$\\RENE\\Data\\Import" };
+        for (var prop in SID) { payload[prop] = SID[prop]; }
+
+        pstools.copyFileToRemote(payload, function (err, results) {
+          if (err) { console.log(err); return; }
+          results.forEach(function(res) {
+            console.log(res);  
+          });
+
+          var cmd = "D:\\RENE\\XmlImport\\ReneXmlImport.exe";
+          var params = filePaths.map(function(fp) {
+            var fileName = fp.match(/[^\\/]+$/)[0];
+            return '"D:\\RENE\\Data\\Import\\' + fileName + '"';
+          });
+
+          var payload = { cmd: cmd, params: params };
           for (var prop in SID) { payload[prop] = SID[prop]; }
 
           pstools.execAtRemote(payload, cb);
@@ -94,6 +126,7 @@ function replyToEmail(message, response, cb) {
   var mailOptions = {
     from: message.envelopeTo,
     to: message.envelopeFrom,
+    cc: message.cc,
     inReplyTo: message.messageId,
     subject: 'Re: ' + message.subject,
     text: ( (typeof response === 'string' || response instanceof String) ? response : JSON.stringify(response, null, 2) )
@@ -116,8 +149,11 @@ mailin.on('startMessage', function (messageInfo) {
  * The message parameters contains the parsed email. */
 mailin.on('message', function (message) {
   //console.log(message);
+
   /* Do something useful with the parsed message here.
    * Use it directly or modify it and post it to a webhook. */
+  console.info("dkim: " + message.dkim);
+  console.info("spf: " + message.spf);
    
   // Uji coba print log
   //console.log(message.to[0].address);
@@ -175,6 +211,7 @@ mailin.on('message', function (message) {
                 entry.pipe(fs.createWriteStream(entryFilePath)).on('finish', function() {
                   console.info('Attachment ZipEntry: ' + entryFilePath);
                   filePaths.push(entryFilePath);
+                  cb(null, entryFilePath);
                 });
               }
             });
@@ -190,13 +227,13 @@ mailin.on('message', function (message) {
       }, function(err, filePaths) {
         if (err) { console.error(err); replyToEmail(message, err); return; }
 
+        var funcName = message.subject.match(/:?\s?(\w+)$/)[1];
+        if (!funcNames[funcName]) { return; }
+        
         // Flatten an array of arrays
         filePaths = filePaths.reduce(function(a, b) {
           return a.concat(b);
-        });
-
-        var funcName = message.subject.match(/:?\s?(\w+)$/)[1];
-        if (!funcNames[funcName]) { return; }
+        }, []);
 
         funcNames[funcName](systemId, filePaths, function (err, results) {
           if (err) { console.log(err); return; }
