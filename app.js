@@ -2,6 +2,7 @@ var mailin = require('mailin');
 var nodemailer = require('nodemailer');
 var mkdirp = require('mkdirp');
 var unzip = require('unzip');
+var AdmZip = require('adm-zip');
 var async = require('async');
 var edge = require('edge');
 
@@ -203,21 +204,45 @@ mailin.on('message', function (message) {
 
           // Extract ke folder kalau zip file
           if (/\.zip$/.test(eachAttachment.fileName)) {
-            var unzipParser = fs.createReadStream(filePath).pipe(unzip.Parse());
             var filePaths = [];
-            unzipParser.on('entry', function (entry) {
-              if (entry.type === 'File') {
-                var entryFilePath = folderPath + '/' + entry.path;
-                entry.pipe(fs.createWriteStream(entryFilePath)).on('finish', function() {
-                  console.info('Attachment ZipEntry: ' + entryFilePath);
-                  filePaths.push(entryFilePath);
-                  cb(null, entryFilePath);
-                });
+
+            var zip = new AdmZip(filePath);
+            var zipEntries = zip.getEntries();
+            zipEntries.forEach(function(entry) {
+              if (!entry.isDirectory) {
+                var entryFilePath = folderPath + '/' + entry.entryName;
+                zip.extractEntryTo(entry, folderPath, true, true);
+                filePaths.push(entryFilePath);
+                console.info('Attachment ZipEntry: ' + entryFilePath);
               }
             });
-            unzipParser.on('close', function() {
-              cb(null, filePaths);
+            setImmediate(cb, null, filePaths);
+
+            /*
+            // Disabled due to High CPU Usage
+            fs.createReadStream(filePath).pipe(
+               unzip.Parse()
+            ).on('finish', function() {
+              setImmediate(cb, null, filePaths);
+
+            }).on('entry', function (entry) {
+              if (entry.type === 'File') {
+                var entryFilePath = folderPath + '/' + entry.path;
+
+                var writeStream = fs.createWriteStream(entryFilePath);
+                writeStream.on('close', function() {
+                  filePaths.push(entryFilePath);
+                  console.info('Attachment ZipEntry: ' + entryFilePath);
+                });
+
+                entry.pipe(writeStream);
+                //filePaths.push(entryFilePath);
+
+              } else {
+                entry.autodrain();
+              }
             });
+            */
 
           } else {
             cb(null, filePath);
