@@ -1,3 +1,5 @@
+var graft = require('graft')();
+
 var mailin = require('mailin');
 var nodemailer = require('nodemailer');
 var mkdirp = require('mkdirp');
@@ -7,102 +9,17 @@ var async = require('async');
 var edge = require('edge');
 
 var fs = require('fs');
+var extend = require('util')._extend;
 
-var pstools = require('./lib/pstools')
+var cps = require('./lib/cps')
 
 /* Config-variables */
-var SIDs = {
-  "3001": {
-    host: "30.139.40.15",
-    username: "Mailin",
-    passwordFile: "data\\3001.pem"
-  },
-  "3002": {
-    host: "30.188.136.245",
-    username: "Mailin",
-    passwordFile: "data\\3002.pem"
-  },
-  "jakarta": {
-    host: "10.0.5.115",
-    username: "Mailin",
-    passwordFile: "data\\3001.pem"
-  },
+mailinSmtpOptions = {
+  port: 2500,
+  disableWebhook: true // Disable the webhook posting.
 };
 
-/* System variables */
-
-var funcNames = {};
-funcNames.MasterXmlImport = function(systemId, filePaths, cb) {
-        if (!SIDs[systemId]) { return; }
-        var SID = SIDs[systemId];
-
-        // Menyambung ke Accurate Client melalui PsTools
-        var payload = { sources: filePaths, destination: "c$\\Accurate\\Data\\Import" };
-        for (var prop in SID) { payload[prop] = SID[prop]; }
-
-        pstools.copyFileToRemote(payload, function (err, results) {
-          if (err) { console.log(err); return; }
-          results.forEach(function(res) {
-            console.log(res);  
-          });
-
-          var payload = { cmd: "C:\\Accurate\\AccXmlImport.exe" };
-          for (var prop in SID) { payload[prop] = SID[prop]; }
-
-          pstools.execAtRemote(payload, cb);
-        });
-};
-
-funcNames.AdjustXmlImport = function(systemId, filePaths, cb) {
-        if (!SIDs[systemId]) { return; }
-        var SID = SIDs[systemId];
-
-        // Menyambung ke RENE Admin Client melalui PsTools
-        var payload = { sources: filePaths, destination: "d$\\RENE\\Data\\Import" };
-        for (var prop in SID) { payload[prop] = SID[prop]; }
-
-        pstools.copyFileToRemote(payload, function (err, results) {
-          if (err) { console.log(err); return; }
-          results.forEach(function(res) {
-            console.log(res);  
-          });
-
-          var cmd = "D:\\RENE\\XmlImport\\ReneXmlImport.exe";
-          var params = filePaths.map(function(fp) {
-            var fileName = fp.match(/[^\\/]+$/)[0];
-            return '"D:\\RENE\\Data\\Import\\' + fileName + '"';
-          });
-
-          var payload = { cmd: cmd, params: params };
-          for (var prop in SID) { payload[prop] = SID[prop]; }
-
-          pstools.execAtRemote(payload, cb);
-        });
-};
-
-funcNames.PluCsvImport = function(systemId, filePaths, cb) {
-        if (!SIDs[systemId]) { return; }
-        var SID = SIDs[systemId];
-
-        // Menyambung ke RENE Admin Client melalui PsTools
-        var payload = { sources: filePaths, destination: "d$\\MT\\Data" };
-        for (var prop in SID) { payload[prop] = SID[prop]; }
-
-        pstools.copyFileToRemote(payload, function (err, results) {
-          if (err) { console.log(err); return; }
-          results.forEach(function(res) {
-            console.log(res);  
-          });
-
-          var payload = { cmd: "D:\\MT\\MtTransferAll.exe" };
-          for (var prop in SID) { payload[prop] = SID[prop]; }
-
-          pstools.execAtRemote(payload, cb);
-        });
-};
-
-// Nodemailer Transporter to smtp-relay.gmail.com
-var replyTransporter = nodemailer.createTransport({
+mailoutSmtpOptions = {
   host: 'smtp-relay.gmail.com',
   port: 465,
   secure: true,
@@ -114,7 +31,25 @@ var replyTransporter = nodemailer.createTransport({
     ],
     rejectUnauthorized: true
   }
-});
+};
+
+
+/* System variables */
+
+// RENE Microservice Instance
+var reneSrv = cps.rene();
+graft.where({ systemId: '3001' }, reneSrv);
+graft.where({ systemId: '3002' }, reneSrv);
+
+// Accurate Microservice Instance
+var accurateSrv = cps.accurate();
+graft.where({ systemId: 'JAKARTA' }, accurateSrv);
+graft.where({ systemId: 'BALI' }, accurateSrv);
+
+
+
+// Nodemailer Transporter to smtp-relay.gmail.com
+var replyTransporter = nodemailer.createTransport(mailoutSmtpOptions);
 
 // Nodemailer Function to assist in replying to emails
 function replyToEmail(message, response, cb) {
@@ -134,6 +69,23 @@ function replyToEmail(message, response, cb) {
   };
 
   replyTransporter.sendMail(mailOptions, cb);
+}
+
+// Nodemailer Function to assist in forwarding emails
+function forwardEmailTo(message, toAddress, cb) {
+  if (!cb) {
+    cb = function(err, res) {
+      console.error(err ? err : res);
+    };
+  }
+
+  forwardedMessage = extend(message, {});
+  forwardedMessage.envelope = {
+    from: message.envelopeTo,
+    to: toAddress
+  };
+
+  replyTransporter.sendMail(forwardedMessage, cb);
 }
 
 /* Event emitted when a connection with the Mailin smtp server is initiated. */
@@ -162,19 +114,20 @@ mailin.on('message', function (message) {
   //  console.log(eachAttachment.fileName);
   //});
   
-  
   // Mendapatkan satu SAP System Id
   var emailRegexp = /^(.+)@([\w\.]+)$/;
-  //var toAddress = "DEV@sap.lmu.co.id";
+  //var toAddress = "DEV@somedomain.com";
   //var match = emailRegexp.exec(toAddress);
   //var systemId = match[1];
   //console.log(systemId);
+
+
   
   // Mendapatkan semua SAP System Ids
   if (!message.to) { message.to = []; } 
   var systemIds = message.to.map(function(eachTo, idx) {
   	var match = emailRegexp.exec(eachTo.address);
-  	return match[1];
+  	return match[1].toUpperCase();
   });
   console.info("SIDs: " + systemIds);
   
@@ -254,22 +207,20 @@ mailin.on('message', function (message) {
       }, function(err, filePaths) {
         if (err) { console.error(err); replyToEmail(message, err); return; }
 
-        var funcName = message.subject.match(/:?\s?(\w+)$/)[1];
-        if (!funcNames[funcName]) { return; }
-        
+        var cmd = message.subject.match(/:?\s?(\w+)$/)[1];
         // Flatten an array of arrays
         filePaths = filePaths.reduce(function(a, b) {
           return a.concat(b);
         }, []);
 
-        funcNames[funcName](systemId, filePaths, function (err, results) {
-          if (err) { console.log(err); return; }
+        // Request to microservices (dispatched by graft.where())
+        var ret = graft.ReadChannel();
+        graft.write({ cmd: cmd, systemId: systemId, filePaths: filePaths, returnChannel: ret });
 
-          results.forEach(function(res) {
-            console.log(res);  
-          });
-
+        // Reply from microservice (might not receive any reply)
+        ret.on('data', function (results) {
           var replyBody = results.join('\n');
+          console.log(replyBody);
 
           // Email balik RFC-response nya ke pengirim email.
           replyToEmail(message, replyBody, function(err, info) {
@@ -310,8 +261,5 @@ mailin.on('message', function (message) {
  *  };
  * Here disable the webhook posting so that you can do what you want with the
  * parsed message. */
-mailin.start({
-  port: 2500,
-  disableWebhook: true // Disable the webhook posting.
-});
+mailin.start(mailinSmtpOptions);
 
