@@ -1,22 +1,26 @@
+var async = require('async');
 var graft = require('graft')();
+var kue = require('kue');
 
 var mailin = require('mailin');
 var nodemailer = require('nodemailer');
 var mkdirp = require('mkdirp');
 var unzip = require('unzip');
 var AdmZip = require('adm-zip');
-var async = require('async');
-var edge = require('edge');
 
 var fs = require('fs');
 var extend = require('util')._extend;
 
-var cps = require('./lib/cps')
+var cps = require('./lib/cps');
+var mailer = require('./lib/mailer');
+
 
 /* Config-variables */
+
 mailinSmtpOptions = {
   port: 2500,
-  disableWebhook: true // Disable the webhook posting.
+  disableWebhook: true // Disable the webhook posting so we can handle emails ourselves.
+  // logFile: '/some/local/path'
 };
 
 mailoutSmtpOptions = {
@@ -36,6 +40,14 @@ mailoutSmtpOptions = {
 
 /* System variables */
 
+// Nodemailer Transporter to smtp-relay.gmail.com
+var mailoutTransporter = nodemailer.createTransport(mailoutSmtpOptions);
+var mailout = mailer.wrap(mailoutTransporter);
+
+// Mailin will store jobs to Microservices (retry with backoff)
+var jobs = kue.createQueue();
+jobs.on('error', function(err) {});  // Must be bound or will crash
+
 // RENE Microservice Instance
 var reneSrv = cps.rene();
 graft.where({ systemId: '3001' }, reneSrv);
@@ -46,47 +58,46 @@ var accurateSrv = cps.accurate();
 graft.where({ systemId: 'JAKARTA' }, accurateSrv);
 graft.where({ systemId: 'BALI' }, accurateSrv);
 
+/* Event emitted when a pending kue job needs to be processed. */
+jobs.process('graft', 1, function(job, done) {
+  // Request to microservices (dispatched by graft.where() pattern-matching)
+  var msg = job.data.graftMessage;
+  var ret = graft.ReadChannel();
+  msg.returnChannel = ret;
+  graft.write(msg);
 
+  // Reply from microservice (Warning: might not receive any reply on returnChannel)
+  ret.on('data', function (msg) {
+    console.log(msg);
 
-// Nodemailer Transporter to smtp-relay.gmail.com
-var replyTransporter = nodemailer.createTransport(mailoutSmtpOptions);
+    if (msg.result && msg.result.join) { msg.result = msg.result.join('\n'); }
+    done(msg.error, msg.result);
+  });
+});
 
-// Nodemailer Function to assist in replying to emails
-function replyToEmail(message, response, cb) {
-  if (!cb) {
-    cb = function(err, res) {
-      console.error(err ? err : res);
-    };
-  }
- 
-  var mailOptions = {
-    from: message.envelopeTo,
-    to: message.envelopeFrom,
-    cc: message.cc,
-    inReplyTo: message.messageId,
-    subject: 'Re: ' + message.subject,
-    text: ( (typeof response === 'string' || response instanceof String) ? response : JSON.stringify(response, null, 2) )
-  };
+/* Event emitted when a pending kue job has completed. */
+jobs.on('job complete', function(id, result) {
+  kue.Job.get(id, function(err, job) {
+    if (err) { return; }
 
-  replyTransporter.sendMail(mailOptions, cb);
-}
+    // Send the result back to the email sender.
+    // Email balik hasil nya ke pengirim email.
+    if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, result); }
+  });
+});
 
-// Nodemailer Function to assist in forwarding emails
-function forwardEmailTo(message, toAddress, cb) {
-  if (!cb) {
-    cb = function(err, res) {
-      console.error(err ? err : res);
-    };
-  }
+/* Event emitted when a pending kue job has failed with no further attempts left. */
+jobs.on('job failed', function(id, errorMsg) {
+  console.log('Job failed on queue');
+  kue.Job.get(id, function(err, job) {
+    if (err) { return; }
 
-  forwardedMessage = extend(message, {});
-  forwardedMessage.envelope = {
-    from: message.envelopeTo,
-    to: toAddress
-  };
+    // Send the result back to the email sender.
+    // Email balik hasil nya ke pengirim email.
+    if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, errorMsg); }
+  });
+});
 
-  replyTransporter.sendMail(forwardedMessage, cb);
-}
 
 /* Event emitted when a connection with the Mailin smtp server is initiated. */
 mailin.on('startMessage', function (messageInfo) {
@@ -134,12 +145,12 @@ mailin.on('message', function (message) {
   // Melakukan untuk setiap systemId (e.g. DEV/PRD)
   systemIds.forEach(function(systemId, idx) {
     //console.info(systemId);
-    replyToEmail(message, "Processing SID: " + systemId, function() {});
+    //mailout.replyToEmail(message, "Processing SID: " + systemId, function() {});
 
     // Membuat subfolder baru berdasarkan setiap systemId
     var folderPath = 'data/' + systemId;
     mkdirp(folderPath, function(err) {
-      if (err) { console.error(err); replyToEmail(message, err); return; }
+      if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
       // Tidak ada error, maka...
       
       // Mendapatkan semua attachments
@@ -205,7 +216,7 @@ mailin.on('message', function (message) {
         });
 
       }, function(err, filePaths) {
-        if (err) { console.error(err); replyToEmail(message, err); return; }
+        if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
 
         var cmd = message.subject.match(/:?\s?(\w+)$/)[1];
         // Flatten an array of arrays
@@ -213,36 +224,31 @@ mailin.on('message', function (message) {
           return a.concat(b);
         }, []);
 
-        // Request to microservices (dispatched by graft.where())
-        var ret = graft.ReadChannel();
-        graft.write({ cmd: cmd, systemId: systemId, filePaths: filePaths, returnChannel: ret });
+        // Create data structure needed in the new persisted kue job
+        var jobData = {
+          title: cmd + ' - ' + message.messageId,
+          graftMessage: {
+            cmd: cmd,
+            systemId: systemId,
+            filePaths: filePaths
+          },
+          sourceMail: {
+            from: message.from,
+            to: message.to,
+            cc: message.cc,
+            envelopeFrom: message.envelopeFrom,
+            envelopeTo: message.envelopeTo,
+            messageId: message.messageId,
+            subject: message.subject
+          }
+        };
 
-        // Reply from microservice (might not receive any reply)
-        ret.on('data', function (results) {
-          var replyBody = results.join('\n');
-          console.log(replyBody);
+        // Create persistent job that will retry graft microservices
+        jobs.create('graft', jobData).attempts(10).backoff({ delay: 60*1000, type:'fixed' }).save(function(err) {
+          if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
+          mailout.replyToEmail(message, "Job Queued for SID: " + systemId + '\n' + "Note: Jangan mengirim data yang sama karena sudah ada mekanisme auto-retry.");
 
-          // Email balik RFC-response nya ke pengirim email.
-          replyToEmail(message, replyBody, function(err, info) {
-            if (err) {
-              console.error("Email-Reply Error: ");
-              console.error(err);
-              return;
-            }
-            // Tidak ada error, maka...
-
-            console.info("Email-Reply Server: " + info.response);
-
-            if (info.rejected && info.rejected.length > 0) {
-              console.info("Email-Reply Rejected: " + info.rejected);
-            }
-
-            if (info.accepted && info.accepted.length > 0) {
-              console.info("Email-Reply Accepted: " + info.accepted);
-            }
-
-            // END
-          });
+          // END          
         });
       });
     });
@@ -251,15 +257,11 @@ mailin.on('message', function (message) {
   
 });
 
+/* Start the Kue jobs processing */
+jobs.promote();
+/* Start the Kue Web UI */
+kue.app.listen(3000);
 
-/* Start the Mailin server. The available options are: 
- *  options = {
- *     port: 25,
- *     webhook: 'http://mydomain.com/mailin/incoming,
- *     disableWebhook: false,
- *     logFile: '/some/local/path'
- *  };
- * Here disable the webhook posting so that you can do what you want with the
- * parsed message. */
+/* Start the Mailin server */
 mailin.start(mailinSmtpOptions);
 

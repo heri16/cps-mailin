@@ -9,47 +9,21 @@ exports.copyFileToRemote = edge.func('ps', function () {/*
   # Mount remote drive as a Temporary local powershell drive
   $UncPath = '\\' + $inputFromJS.host + '\' + $inputFromJS.destination
   $DriveName = [guid]::NewGuid()
-  New-PSDrive -Name $DriveName -PSProvider FileSystem -Root $UncPath -Credential $cred | Select-Object Root | Out-String
+  New-PSDrive -Name $DriveName -PSProvider FileSystem -Root $UncPath -Credential $cred | Out-String
 
   # Copy files from local source to remote destination
+  $destination = '\\' + $inputFromJS.host + '\' + $inputFromJS.destination
+  $destination | Out-String
   if ($inputFromJS.sources -ne $Null) {
     ForEach ($source in $inputFromJS.sources) {
-      $localSource = $source
-      $remoteDestination = '\\' + $inputFromJS.host + '\' + $inputFromJS.destination
-      Copy-Item $localSource -Destination $remoteDestination
+      Copy-Item $source -Destination $destination
     }
   } else {
-    $localSource = $inputFromJS.source
-    $remoteDestination = '\\' + $inputFromJS.host + '\' + $inputFromJS.destination
-    Copy-Item $localSource -Destination $remoteDestination
+    Copy-Item $inputFromJS.source -Destination $destination
   }
   Remove-PSDrive $DriveName
-*/});
 
-exports.copyFileFromRemote = edge.func('ps', function () {/*
-  # Create Remote Credential in Powershell 
-  $username = $inputFromJS.username
-  $passwordSec = cat $inputFromJS.passwordFile | ConvertTo-SecureString
-  $cred = New-Object -typename System.Management.Automation.PSCredential -argumentlist $username, $passwordSec
-
-  # Mount remote drive as a Temporary local powershell drive
-  $UncPath = '\\' + $inputFromJS.host + '\' + $inputFromJS.destination
-  $DriveName = [guid]::NewGuid()
-  New-PSDrive -Name $DriveName -PSProvider FileSystem -Root $UncPath -Credential $cred | Select-Object Root | Out-String
-
-  # Copy files from remote destination to local source
-  if ($inputFromJS.sources -ne $Null) {
-    ForEach ($source in $inputFromJS.sources) {
-      $remoteSource = '\\' + $inputFromJS.host + '\' + $source
-      $localDestination = $inputFromJS.destination
-      Copy-Item $remoteSource -Destination $localDestination
-    }
-  } else {
-    $remoteSource = '\\' + $inputFromJS.host + '\' + $inputFromJS.source
-    $localDestination = $inputFromJS.destination
-    Copy-Item $remoteSource -Destination $localDestination
-  }
-  Remove-PSDrive $DriveName
+  Get-ChildItem $destination | Out-String
 */});
 
 exports.execAtRemote = edge.func('ps', function () {/*
@@ -89,7 +63,8 @@ exports.execAtRemote = edge.func('ps', function () {/*
       #$Null = Wait-Event -SourceIdentifier "InvocationStateChanged1"
     }
 
-    $out; $psThread; $asyncRes
+    # $out; $psThread; $asyncRes
+    $out
   }
 
   Function Query-RemoteSession
@@ -101,12 +76,12 @@ exports.execAtRemote = edge.func('ps', function () {/*
     )
 
     # Query remote sessions
-    $command = "& { .\bin\PsExec.exe $('\\' + $hosts) -u $username -p $password -s qwinsta } > .\data\sessions-${hosts}.txt"
-    Start-Process powershell -ArgumentList '-Command', $command -Wait -WindowStyle Minimized
-
+    #$command = "& { .\bin\PsExec.exe $('\\' + $hosts) -u $username -p $password -s qwinsta } > .\data\sessions-${hosts}.txt"
+    #Start-Process powershell -ArgumentList '-Command', $command -Wait -WindowStyle Minimized
+    $Null = & .\bin\PaExec.exe -accepteula $('\\' + $hosts) -u $username -p $password -s "C:\Windows\Sysnative\qwinsta.exe" | Tee-Object -Variable stdOut
 
     # Get session id and state
-    $sessionSelect = cat .\data\sessions-${hosts}.txt | Select-String "([\w-#]*)\s+${username}\s+(\w+)\s+(\w+)"
+    $sessionSelect = $stdOut | Select-String "([\w-#]*)\s+${username}\s+(\w+)\s+(\w+)"
     $sessionId = $sessionSelect | Foreach {$_.Matches[0].Groups[2].Value}
     $sessionState = $sessionSelect | Foreach {$_.Matches[0].Groups[3].Value}
     $sessionName = $sessionSelect | Foreach {$_.Matches[0].Groups[1].Value}
@@ -114,7 +89,7 @@ exports.execAtRemote = edge.func('ps', function () {/*
     $sessionId; $sessionState; $sessionName
   }
 
-  # Temporarily Here
+  $process = {
     # Set Path to Binary Tools
     New-Alias psexec .\bin\PsExec -Force
     New-Alias wfreerdp .\bin\wfreerdp -Force
@@ -161,8 +136,11 @@ exports.execAtRemote = edge.func('ps', function () {/*
     $params = $inputFromJS.params | % { '"' + $_ + '"'}
     psexec \\$hosts -u $username -p $password -i $sessionId -h $inputFromJS.cmd (,$params) | Out-String
 
-    # Workaround due to cannot pipe stdout when running interactively
-    psexec \\$hosts -u $username -p $password cmd /c type "$($inputFromJS.cmd).log" | Out-String
+    # Temporary Workaround
+    # & .\bin\PaExec.exe -accepteula \\$hosts -u $username -p $password cmd /c "type ${inputFromJS.cmd}.log" | Tee-Object -Variable stdOut
+    # echo $stdOut
+  }
+
+  & $process
 
 */});
-
