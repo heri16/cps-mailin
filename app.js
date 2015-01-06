@@ -4,6 +4,7 @@ var kue = require('kue');
 
 var mailin = require('mailin');
 var nodemailer = require('nodemailer');
+var tmp = require('tmp');
 var mkdirp = require('mkdirp');
 var unzip = require('unzip');
 var AdmZip = require('adm-zip');
@@ -80,15 +81,24 @@ jobs.on('job complete', function(id, result) {
   kue.Job.get(id, function(err, job) {
     if (err) { return; }
 
+    // Store the result in Kue db
+    job.data.result = result;
+    job.save();
+
     // Send the result back to the email sender.
     // Email balik hasil nya ke pengirim email.
     if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, result); }
   });
 });
 
+/* Event emitted when a pending kue job has failed an attempt. */
+jobs.on('job failed attempt', function(id, errorMsg, attempts) {
+  console.log('Job ' + id + ' failed attempt ' + attempts + ' on queue');
+});
+
 /* Event emitted when a pending kue job has failed with no further attempts left. */
 jobs.on('job failed', function(id, errorMsg) {
-  console.log('Job failed on queue');
+  console.log('Job ' + id + ' failed all attempts on queue');
   kue.Job.get(id, function(err, job) {
     if (err) { return; }
 
@@ -112,30 +122,21 @@ mailin.on('startMessage', function (messageInfo) {
 /* Event emitted after a message was received and parsed.
  * The message parameters contains the parsed email. */
 mailin.on('message', function (message) {
-  //console.log(message);
 
   /* Do something useful with the parsed message here.
    * Use it directly or modify it and post it to a webhook. */
+  // console.log(message);
   console.info("dkim: " + message.dkim);
   console.info("spf: " + message.spf);
    
-  // Uji coba print log
-  //console.log(message.to[0].address);
+  // Test print all attachments
   //message.attachments.forEach(function(eachAttachment, idx) {
   //  console.log(eachAttachment.fileName);
   //});
   
-  // Mendapatkan satu SAP System Id
-  var emailRegexp = /^(.+)@([\w\.]+)$/;
-  //var toAddress = "DEV@somedomain.com";
-  //var match = emailRegexp.exec(toAddress);
-  //var systemId = match[1];
-  //console.log(systemId);
-
-
-  
   // Mendapatkan semua SAP System Ids
   if (!message.to) { message.to = []; } 
+  var emailRegexp = /^(.+)@([\w\.]+)$/;
   var systemIds = message.to.map(function(eachTo, idx) {
   	var match = emailRegexp.exec(eachTo.address);
   	return match[1].toUpperCase();
@@ -144,12 +145,8 @@ mailin.on('message', function (message) {
   
   // Melakukan untuk setiap systemId (e.g. DEV/PRD)
   systemIds.forEach(function(systemId, idx) {
-    //console.info(systemId);
-    //mailout.replyToEmail(message, "Processing SID: " + systemId, function() {});
-
-    // Membuat subfolder baru berdasarkan setiap systemId
-    var folderPath = 'data/' + systemId;
-    mkdirp(folderPath, function(err) {
+    // Membuat temp folder baru berdasarkan systemId
+    tmp.dir({ unsafeCleanup: false, dir: './data', prefix: systemId + '-' }, function(err, folderPath, cleanupTmpCb) {
       if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
       // Tidak ada error, maka...
       
@@ -216,7 +213,13 @@ mailin.on('message', function (message) {
         });
 
       }, function(err, filePaths) {
-        if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
+        if (err) {
+          // Called when any first async task has an error
+          console.error(err);
+          mailout.replyToEmail(message, err);
+          cleanupTmpCb();
+          return;
+        }
 
         var cmd = message.subject.match(/:?\s?(\w+)$/)[1];
         // Flatten an array of arrays
@@ -244,9 +247,9 @@ mailin.on('message', function (message) {
         };
 
         // Create persistent job that will retry graft microservices
-        jobs.create('graft', jobData).attempts(10).backoff({ delay: 60*1000, type:'fixed' }).save(function(err) {
+        jobs.create('graft', jobData).attempts(10).backoff({ type:'exponential', delay: 2000 }).save(function(err) {
           if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
-          mailout.replyToEmail(message, "Job Queued for SID: " + systemId + '\n' + "Note: Jangan mengirim data yang sama karena sudah ada mekanisme auto-retry.");
+          mailout.replyToEmail(message, "Job Queued for SID: " + systemId + '\n\n' + "Note: Jangan mengirim data yang sama karena sudah ada mekanisme auto-retry.");
 
           // END          
         });
@@ -260,6 +263,7 @@ mailin.on('message', function (message) {
 /* Start the Kue jobs processing */
 jobs.promote();
 /* Start the Kue Web UI */
+kue.app.set('title', 'Mailin Job Queue');
 kue.app.listen(3000);
 
 /* Start the Mailin server */
