@@ -3,13 +3,13 @@ var graft = require('graft')();
 var kue = require('kue');
 
 var mailin = require('mailin');
-var nodemailer = require('nodemailer');
 var tmp = require('tmp');
 var mkdirp = require('mkdirp');
 var unzip = require('unzip');
 var AdmZip = require('adm-zip');
 
 var fs = require('fs');
+var path = require('path');
 var extend = require('util')._extend;
 
 var cps = require('./lib/cps');
@@ -18,13 +18,15 @@ var mailer = require('./lib/mailer');
 
 /* Config-variables */
 
-mailinSmtpOptions = {
+var config = require('./config');
+
+config.mailinSmtpOptions = {
   port: 2500,
   disableWebhook: true // Disable the webhook posting so we can handle emails ourselves.
   // logFile: '/some/local/path'
 };
 
-mailoutSmtpOptions = {
+config.mailoutSmtpOptions = {
   host: 'smtp-relay.gmail.com',
   port: 465,
   secure: true,
@@ -42,25 +44,24 @@ mailoutSmtpOptions = {
 /* System variables */
 
 // Nodemailer Transporter to smtp-relay.gmail.com
-var mailoutTransporter = nodemailer.createTransport(mailoutSmtpOptions);
-var mailout = mailer.wrap(mailoutTransporter);
+var mailout = mailer.create(config.mailoutSmtpOptions);
 
 // Mailin will store jobs to Microservices (retry with backoff)
 var jobs = kue.createQueue();
 jobs.on('error', function(err) {});  // Must be bound or will crash
 
 // RENE Microservice Instance
-var reneSrv = cps.rene();
+var reneSrv = cps.rene(config.reneTargets);
 graft.where({ systemId: '3001' }, reneSrv);
 graft.where({ systemId: '3002' }, reneSrv);
 
 // Accurate Microservice Instance
-var accurateSrv = cps.accurate();
+var accurateSrv = cps.accurate(config.accurateTargets);
 graft.where({ systemId: 'JAKARTA' }, accurateSrv);
 graft.where({ systemId: 'BALI' }, accurateSrv);
 
 /* Event emitted when a pending kue job needs to be processed. */
-jobs.process('graft', 1, function(job, done) {
+jobs.process('GraftJS', 1, function(job, done) {
   // Request to microservices (dispatched by graft.where() pattern-matching)
   var msg = job.data.graftMessage;
   var ret = graft.ReadChannel();
@@ -146,14 +147,14 @@ mailin.on('message', function (message) {
   // Melakukan untuk setiap systemId (e.g. DEV/PRD)
   systemIds.forEach(function(systemId, idx) {
     // Membuat temp folder baru berdasarkan systemId
-    tmp.dir({ unsafeCleanup: false, dir: './data', prefix: systemId + '-' }, function(err, folderPath, cleanupTmpCb) {
+    tmp.dir({ unsafeCleanup: false, dir: './.tmp', prefix: systemId + '-' }, function(err, folderPath, cleanupTmpCb) {
       if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
       // Tidak ada error, maka...
       
       // Mendapatkan semua attachments
       async.mapLimit(message.attachments, 2, function(eachAttachment, cb) {
         // Menulis setiap attachment ke dalam subfolder (setiap systemId)
-        var filePath = folderPath + '/' + eachAttachment.fileName;
+        var filePath = path.join(folderPath, eachAttachment.fileName);
         fs.writeFile(filePath, eachAttachment.content, function(err) {
           if (err) { cb(err); return; }
           // Tidak ada error, maka...
@@ -171,7 +172,7 @@ mailin.on('message', function (message) {
             var zipEntries = zip.getEntries();
             zipEntries.forEach(function(entry) {
               if (!entry.isDirectory) {
-                var entryFilePath = folderPath + '/' + entry.entryName;
+                var entryFilePath = path.join(folderPath, entry.entryName);
                 zip.extractEntryTo(entry, folderPath, true, true);
                 filePaths.push(entryFilePath);
                 console.info('Attachment ZipEntry: ' + entryFilePath);
@@ -190,7 +191,7 @@ mailin.on('message', function (message) {
 
             }).on('entry', function (entry) {
               if (entry.type === 'File') {
-                var entryFilePath = folderPath + '/' + entry.path;
+                var entryFilePath = path.join(folderPath, entry.path);
 
                 var writeStream = fs.createWriteStream(entryFilePath);
                 writeStream.on('close', function() {
@@ -229,7 +230,7 @@ mailin.on('message', function (message) {
 
         // Create data structure needed in the new persisted kue job
         var jobData = {
-          title: cmd + ' - ' + message.messageId,
+          title: cmd + ' ' + systemId + ' - ' + message.messageId,
           graftMessage: {
             cmd: cmd,
             systemId: systemId,
@@ -247,7 +248,7 @@ mailin.on('message', function (message) {
         };
 
         // Create persistent job that will retry graft microservices
-        jobs.create('graft', jobData).attempts(10).backoff({ type:'exponential', delay: 2000 }).save(function(err) {
+        jobs.create('GraftJS', jobData).attempts(10).backoff({ type:'exponential', delay: 2000 }).save(function(err) {
           if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
           mailout.replyToEmail(message, "Job Queued for SID: " + systemId + '\n\n' + "Note: Jangan mengirim data yang sama karena sudah ada mekanisme auto-retry.");
 
@@ -267,5 +268,5 @@ kue.app.set('title', 'Mailin Job Queue');
 kue.app.listen(3000);
 
 /* Start the Mailin server */
-mailin.start(mailinSmtpOptions);
+mailin.start(config.mailinSmtpOptions);
 
