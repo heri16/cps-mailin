@@ -10,6 +10,7 @@ var AdmZip = require('adm-zip');
 
 var fs = require('fs');
 var path = require('path');
+var zlib = require('zlib');
 var extend = require('util')._extend;
 
 var cps = require('./lib/cps');
@@ -62,8 +63,19 @@ graft.where({ systemId: 'BALI' }, accurateSrv);
 
 /* Event emitted when a pending kue job needs to be processed. */
 jobs.process('GraftJS', 1, function(job, done) {
-  // Request to microservices (dispatched by graft.where() pattern-matching)
+  // Get persisted graftMessage from job data
   var msg = job.data.graftMessage;
+  
+  // Convert filePaths into filestreams that can be sent via graft jschan
+  var fileStreams = {};
+  msg.filePaths.forEach(function(filePath) {
+    var fileName = path.basename(filePath);
+    //var zlibCompress = zlib.createDeflate();
+    fileStreams[fileName] = fs.createReadStream(filePath);
+  });
+  msg.fileStreams = fileStreams;
+
+  // Request to microservices (dispatched by graft.where() pattern-matching)
   var ret = graft.ReadChannel();
   msg.returnChannel = ret;
   graft.write(msg);
@@ -147,7 +159,7 @@ mailin.on('message', function (message) {
   // Melakukan untuk setiap systemId (e.g. DEV/PRD)
   systemIds.forEach(function(systemId, idx) {
     // Membuat temp folder baru berdasarkan systemId
-    tmp.dir({ unsafeCleanup: false, dir: './.tmp', prefix: systemId + '-' }, function(err, folderPath, cleanupTmpCb) {
+    tmp.dir({ unsafeCleanup: false, dir: './.tmp', prefix: systemId + '-' }, function(err, folderPath, cleanupTmp) {
       if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
       // Tidak ada error, maka...
       
@@ -213,18 +225,19 @@ mailin.on('message', function (message) {
           }
         });
 
-      }, function(err, filePaths) {
+      }, function(err, filePathsArrays) {
         if (err) {
           // Called when any first async task has an error
           console.error(err);
           mailout.replyToEmail(message, err);
-          cleanupTmpCb();
+          cleanupTmp();
           return;
         }
 
+        // Get desired command from the email subject
         var cmd = message.subject.match(/:?\s?(\w+)$/)[1];
-        // Flatten an array of arrays
-        filePaths = filePaths.reduce(function(a, b) {
+        // Flatten an array of arrays of attachment paths
+        var filePaths = filePathsArrays.reduce(function(a, b) {
           return a.concat(b);
         }, []);
 
@@ -248,7 +261,7 @@ mailin.on('message', function (message) {
         };
 
         // Create persistent job that will retry graft microservices
-        jobs.create('GraftJS', jobData).attempts(10).backoff({ type:'exponential', delay: 2000 }).save(function(err) {
+        jobs.create('GraftJS', jobData).attempts(15).backoff({ type:'exponential', delay: 2000 }).save(function(err) {
           if (err) { console.error(err); mailout.replyToEmail(message, err); return; }
           mailout.replyToEmail(message, "Job Queued for SID: " + systemId + '\n\n' + "Note: Jangan mengirim data yang sama karena sudah ada mekanisme auto-retry.");
 
