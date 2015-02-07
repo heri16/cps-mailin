@@ -14,6 +14,9 @@ RUN ["/bin/bash", "-l", "-c", "npm install"]
 # Add the application directory structure to /app on the container's filesystem
 ADD . /app
 
+# Link redis in application config
+RUN ["/bin/bash", "-l", "-c", "echo \"exports.redisOptions = { host: 'redis', port: process.env.REDIS_PORT_6379_TCP_PORT };\" >> /app/config/index.js"]
+
 # Open port 3000 on the container
 EXPOSE 3000
 
