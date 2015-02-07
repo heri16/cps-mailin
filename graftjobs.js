@@ -6,49 +6,38 @@ var spdy = require('graft/spdy');
 var fs = require('fs');
 var path = require('path');
 var zlib = require('zlib');
-var extend = require('util')._extend;
 var domain = require('domain');
 
-var mailer = require('./lib/mailer');
-var cps = require('./lib/cps');
+var Mailer = require('./lib/mailer');
+var CpsRene = require('./lib/cps-rene');
+var CpsAccurate = require('./lib/cps-accurate');
 
 
 /* Config-variables */
 
 var config = require('./config');
 
-config.mailoutSmtpOptions = {
-  host: 'smtp-relay.gmail.com',
-  port: 465,
-  secure: true,
-  tls: {
-    ca: [
-      fs.readFileSync('certs/d83c1a7f4d0446bb2081b81a1670f8183451ca24.pem'), // Google Internet Authority G2
-      fs.readFileSync('certs/710b673d8cccc305993d05edb5ddab1cef3ef464.pem'), // GeoTrust Global CA
-      fs.readFileSync('certs/d23209ad23d314232174e40d7f9d62139786633a.pem') // Equifax Secure Certificate Authority
-    ],
-    rejectUnauthorized: true
-  }
-};
 
 /* System variables */
 
 // Nodemailer Transporter to smtp-relay.gmail.com
-var mailout = mailer.create(config.mailoutSmtpOptions);
+var mailout = new Mailer(config.mailoutOptions);
 
 // Mailin will store jobs to Microservices (retry with backoff)
-var jobs = kue.createQueue();
+var jobs = kue.createQueue({ redis: config.redisOptions });
 jobs.on('error', function(err) {});  // Must be bound or will crash
 
 // RENE Microservice Instance
-var reneSrv = cps.rene(config.reneTargets);
 //var reneSrv = spdy.client({ port: 6001 });
+var rene = new CpsRene(config.cpsReneOptions);
+var reneSrv = rene.service;
 graft.where({ systemId: '3001' }, reneSrv);
 graft.where({ systemId: '3002' }, reneSrv);
 
 // Accurate Microservice Instance
-var accurateSrv = cps.accurate(config.accurateTargets);
 //var accurateSrv = spdy.client({ port: 6002 });
+var accurate = new CpsAccurate(config.cpsAccurateOptions);
+var accurateSrv = accurate.service;
 graft.where({ systemId: 'JAKARTA' }, accurateSrv);
 graft.where({ systemId: 'BALI' }, accurateSrv);
 

@@ -1,44 +1,25 @@
 var mailin = require('mailin');
 
-var fs = require('fs');
 var domain = require('domain');
 
-var mailjob = require('./lib/mailjob');
-var mailer = require('./lib/mailer');
+var Mailjob = require('./lib/mailjob');
+var Mailer = require('./lib/mailer');
 
 /* Config-variables */
 
 var config = require('./config');
 
-config.mailinSmtpOptions = {
-  port: 2500,
-  disableWebhook: true, // Disable the webhook posting so we can handle emails ourselves.
-  smtpOptions: {
-    SMTPBanner: 'CPSSoft Smtp Server',
-    validateSender: true,
-    validateRecipients: true
-  }
-  // logFile: '/some/local/path'
-};
-
-config.mailoutSmtpOptions = {
-  host: 'smtp-relay.gmail.com',
-  port: 465,
-  secure: true,
-  tls: {
-    ca: [
-      fs.readFileSync('certs/d83c1a7f4d0446bb2081b81a1670f8183451ca24.pem'), // Google Internet Authority G2
-      fs.readFileSync('certs/710b673d8cccc305993d05edb5ddab1cef3ef464.pem'), // GeoTrust Global CA
-      fs.readFileSync('certs/d23209ad23d314232174e40d7f9d62139786633a.pem') // Equifax Secure Certificate Authority
-    ],
-    rejectUnauthorized: true
-  }
-};
-
 /* System variables */
 
+// Jobs Queue Adder
+var mailjob = new Mailjob({
+  kue: {
+    redis: config.redisOptions
+  }
+});
+
 // Nodemailer Transporter to smtp-relay.gmail.com
-var mailout = mailer.create(config.mailoutSmtpOptions);
+var mailout = new Mailer(config.mailoutOptions);
 
 /* Event emitted when a connection with the Mailin smtp server is initiated. */
 mailin.on('startMessage', function (connection) {
@@ -89,5 +70,4 @@ mailin.on('message', d.bind(function (connection, data, content) {
 }));
 
 /* Start the Mailin server */
-mailin.start(config.mailinSmtpOptions);
-
+mailin.start(config.mailinOptions);

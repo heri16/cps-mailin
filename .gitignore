@@ -1,5 +1,5 @@
-# Configuration
-config
+# Sensitive files
+*.pem
 
 # Backups
 *.bak
