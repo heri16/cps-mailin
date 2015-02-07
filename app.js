@@ -12,7 +12,12 @@ var config = require('./config');
 
 config.mailinSmtpOptions = {
   port: 2500,
-  disableWebhook: true // Disable the webhook posting so we can handle emails ourselves.
+  disableWebhook: true, // Disable the webhook posting so we can handle emails ourselves.
+  smtpOptions: {
+    SMTPBanner: 'CPSSoft Smtp Server',
+    validateSender: true,
+    validateRecipients: true
+  }
   // logFile: '/some/local/path'
 };
 
@@ -36,25 +41,40 @@ config.mailoutSmtpOptions = {
 var mailout = mailer.create(config.mailoutSmtpOptions);
 
 /* Event emitted when a connection with the Mailin smtp server is initiated. */
-mailin.on('startMessage', function (messageInfo) {
-  /* messageInfo = {
+mailin.on('startMessage', function (connection) {
+  /* connection = {
       from: 'sender@somedomain.com',
       to: 'someaddress@yourdomain.com',
-      connectionId: 't84h5ugf'
+      id: 't84h5ugf',
+      authentication: { username: null, authenticated: false, status: 'NORMAL' }
+    }
   }; */
-  //console.info(messageInfo);
+  console.log(connection);
+
 });
 
-/* Event emitted after a message was received and parsed.
- * The message parameters contains the parsed email. */
+/* Event emitted when a connection with the Mailin smtp server is initiated. */
+mailin.on('validateSender', function (connection, email, callback) {
+  var senderDomain = email.split('@').pop();
+  callback(senderDomain != 'frestive.com' && senderDomain != 'lmu.co.id' ? new Error('Failed sender') : null);
+});
+
+/* Event emitted when a connection with the Mailin smtp server is initiated. */
+mailin.on('validateRecipient', function (connection, email, callback) {
+  var recipientDomain = email.split('@').pop();
+  callback(recipientDomain != 'cps.frestive.com' ? new Error('Failed recipient') : null);
+});
+
+/* Event emitted after a message was received and parsed. */
 var d = domain.create();
 d.on('error', function(err) { console.log(err); });
-mailin.on('message', d.bind(function(message) {
+mailin.on('message', d.bind(function (connection, data, content) {
+  //console.log(data);
+  console.info("dkim: " + data.dkim);
+  console.info("spf: " + data.spf);
+
   /* Do something useful with the parsed message here.
-   * Use it directly or modify it and post it to a webhook. */
-  // console.log(message);
-  console.info("dkim: " + message.dkim);
-  console.info("spf: " + message.spf);
+   * Use parsed message `data` directly or use raw message `content`. */
    
   // Test print all attachments
   //message.attachments.forEach(function(eachAttachment, idx) {
@@ -62,10 +82,10 @@ mailin.on('message', d.bind(function(message) {
   //});
 
   var replyToMessage = function(response) {
-    return mailout.replyToEmail(message, response);
+    return mailout.replyToEmail(data, response);
   }
 
-  mailjob.onMessage(message, replyToMessage);
+  mailjob.onMessage(data, replyToMessage);
 }));
 
 /* Start the Mailin server */
