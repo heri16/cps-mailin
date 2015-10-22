@@ -33,6 +33,7 @@ var processGraftJob = function processGraftJob(job, ctx, done) {
   //d.run(function() {
     // Get persisted graftMessage from job data
     var msg = job.data.graftMessage;
+    if (msg) { job.progress(1, 8); }
   
     // Convert filePaths into filestreams that can be sent via graft jschan
     if (msg.filePaths) {
@@ -42,24 +43,40 @@ var processGraftJob = function processGraftJob(job, ctx, done) {
         var fileStream = fs.createReadStream(filePath);
 
         fileStreams[fileName] = fileStream;
+        job.progress(2, 8, 'files-some-ready');
+        job.log("File ready: " + fileName);
       });
       msg.fileStreams = fileStreams;
+      job.progress(3, 8, 'files-all-ready');
     }
 
     // Reply from microservice (Warning: might not receive any reply on returnChannel)
     var results = [];
+    var isError = false;
     msg.returnChannel = graft.ReadChannel().on('data', function (msg) {
       console.dir(msg);
+      job.progress(6, 8, 'channel-returning-data');
       
-      if (msg.error) { done(msg.error); }
-      else if (msg.result) { results.push(msg.result); }
+      if (msg.error) { isError = true; done(msg.error); }
+      else if (msg.result) { results.push(msg.result); job.log(msg.result); }
 
     }).on('end', function() {
-      if (results.length > 0) { done(null, results); }
+      job.progress(7, 8, 'channel-ended');
+      job.log("Microservice responded with " + results.length + " results.");
+
+      if (!isError && results.length === 0) {
+        done(new Error("Graft returnChannel ended with no results. Likely timeout issue."));
+        return;
+      }
+      done(null, results);
     });
 
-    // Request to microservices (dispatched by graft.where() pattern-matching)
-    graft.write(msg);
+    // Send Request to microservices
+    job.progress(4, 8, 'request-sending');
+    job.log("Sending request to graft microservice");
+    graft.write(msg);  // Note: Request message dispatched by graft.where() pattern-matching
+    job.progress(5, 8, 'request-sent');
+    job.log("Sent request to graft microservice");
   //});
 };
 
@@ -70,7 +87,8 @@ jobs.on('job complete', function(id, result) {
     if (err) { console.error(err); return; }
 
     // Store the result in Kue db
-    job.set('result', result);
+    //job.data.success = true;
+    //job.set('data', JSON.stringify(job.data));
 
     // Send the result back to the email sender.
     // Email balik hasil nya ke pengirim email.
@@ -98,7 +116,7 @@ jobs.on('job failed', function(id, errorMsg) {
 // RENE Microservice Instance
 //var rene = new CpsRene(config.cpsReneOptions);
 //var reneSrv = rene.service;
-var reneSrv = spdy.client({ host: '10.0.4.15', port: 6001 });
+var reneSrv = spdy.client({ host: '10.0.4.15', port: 6001, reconnectTimeout: 10000 });
 if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targets === 'object') {
   Object.keys(config.cpsReneOptions.targets).forEach(function(target, idx) {
     // Route graft jobs to relevant microservice
@@ -111,7 +129,7 @@ if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targe
 // Accurate Microservice Instance
 //var accurate = new CpsAccurate(config.cpsAccurateOptions);
 //var accurateSrv = accurate.service;
-var accurateSrv = spdy.client({ host: '10.0.4.15', port: 6002 });
+var accurateSrv = spdy.client({ host: '10.0.4.15', port: 6002, reconnectTimeout: 10000 });
 if (config.cpsAccurateOptions.targets !== null && typeof config.cpsAccurateOptions.targets === 'object') {
   Object.keys(config.cpsAccurateOptions.targets).forEach(function(target, idx) {
     // Route graft jobs to relevant microservice
