@@ -28,7 +28,7 @@ var jobs = kue.createQueue({ redis: config.redisOptions });
 jobs.on('error', function(err) { console.warn(err); });  // Must be bound or will crash
 
 /* Event emitted when a pending kue job needs to be processed. */
-var processGraftJob = function processGraftJob(job, done) {
+var processGraftJob = function processGraftJob(job, ctx, done) {
    console.log('Job ' + job.id + ' processing...');
   //d.run(function() {
     // Get persisted graftMessage from job data
@@ -98,7 +98,7 @@ jobs.on('job failed', function(id, errorMsg) {
 // RENE Microservice Instance
 //var rene = new CpsRene(config.cpsReneOptions);
 //var reneSrv = rene.service;
-var reneSrv = spdy.client({ host: '127.0.0.1', port: 6001 });
+var reneSrv = spdy.client({ host: '10.0.4.15', port: 6001 });
 if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targets === 'object') {
   Object.keys(config.cpsReneOptions.targets).forEach(function(target, idx) {
     // Route graft jobs to relevant microservice
@@ -111,7 +111,7 @@ if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targe
 // Accurate Microservice Instance
 //var accurate = new CpsAccurate(config.cpsAccurateOptions);
 //var accurateSrv = accurate.service;
-var accurateSrv = spdy.client({ host: '127.0.0.1', port: 6002 });
+var accurateSrv = spdy.client({ host: '10.0.4.15', port: 6002 });
 if (config.cpsAccurateOptions.targets !== null && typeof config.cpsAccurateOptions.targets === 'object') {
   Object.keys(config.cpsAccurateOptions.targets).forEach(function(target, idx) {
     // Route graft jobs to relevant microservice

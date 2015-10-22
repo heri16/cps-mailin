@@ -4,10 +4,7 @@ var config = require('./config');
 
 // Mailin will store jobs to Microservices (retry with backoff)
 var jobs = kue.createQueue({ redis: config.redisOptions });
-jobs.on('error', function(err) {});  // Must be bound or will crash
-
-/* Start the Kue jobs processing */
-jobs.promote();
+jobs.on('error', function(err) { console.warn(err); });  // Must be bound or will crash
 
 /* Start the Kue Web UI */
 kue.app.set('title', 'Mailin Job Queue');
