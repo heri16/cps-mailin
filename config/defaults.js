@@ -51,16 +51,16 @@ exports.cpsReneOptions = {
 exports.cpsAccurateOptions = {
   targets: {
     "JAKARTA": {
-      computerName: "10.0.5.115",
+      computerName: "10.0.6.110",
       username: "Mailin",
-      passwordFile: "config\\3001.pem",
+      passwordFile: "config\\acc-prd2.pem",
       accurateDbHost: "10.0.4.10", 
       accurateGdbPath: "D:\\JAKARTA.GDB"
     },
     "BALI": {
-      computerName: "10.0.5.115",
+      computerName: "10.0.6.110",
       username: "Mailin",
-      passwordFile: "config\\3001.pem",
+      passwordFile: "config\\acc-prd2.pem",
       accurateDbHost: "10.0.4.10", 
       accurateGdbPath: "D:\\BALI.GDB"
     }

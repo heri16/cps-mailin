@@ -25,24 +25,11 @@ var mailout = new Mailer(config.mailoutOptions);
 
 // Mailin will store jobs to Microservices (retry with backoff)
 var jobs = kue.createQueue({ redis: config.redisOptions });
-jobs.on('error', function(err) {});  // Must be bound or will crash
-
-// RENE Microservice Instance
-//var reneSrv = spdy.client({ port: 6001 });
-var rene = new CpsRene(config.cpsReneOptions);
-var reneSrv = rene.service;
-graft.where({ systemId: '3001' }, reneSrv);
-graft.where({ systemId: '3002' }, reneSrv);
-
-// Accurate Microservice Instance
-//var accurateSrv = spdy.client({ port: 6002 });
-var accurate = new CpsAccurate(config.cpsAccurateOptions);
-var accurateSrv = accurate.service;
-graft.where({ systemId: 'JAKARTA' }, accurateSrv);
-graft.where({ systemId: 'BALI' }, accurateSrv);
+jobs.on('error', function(err) { console.warn(err); });  // Must be bound or will crash
 
 /* Event emitted when a pending kue job needs to be processed. */
-jobs.process('GraftJS', 1, function(job, done) {
+var processGraftJob = function processGraftJob(job, done) {
+   console.log('Job ' + job.id + ' processing...');
   //d.run(function() {
     // Get persisted graftMessage from job data
     var msg = job.data.graftMessage;
@@ -74,16 +61,16 @@ jobs.process('GraftJS', 1, function(job, done) {
     // Request to microservices (dispatched by graft.where() pattern-matching)
     graft.write(msg);
   //});
-});
+};
 
 /* Event emitted when a pending kue job has completed. */
 jobs.on('job complete', function(id, result) {
+  console.log('Job ' + id + ' completed.');
   kue.Job.get(id, function(err, job) {
-    if (err) { return; }
+    if (err) { console.error(err); return; }
 
     // Store the result in Kue db
-    job.data.result = result;
-    job.save();
+    job.set('result', result);
 
     // Send the result back to the email sender.
     // Email balik hasil nya ke pengirim email.
@@ -93,19 +80,45 @@ jobs.on('job complete', function(id, result) {
 
 /* Event emitted when a pending kue job has failed an attempt. */
 jobs.on('job failed attempt', function(id, errorMsg, attempts) {
-  console.log('Job ' + id + ' failed attempt ' + attempts + ' on queue');
+  console.log('Job ' + id + ' failed attempt ' + attempts + ' on queue...');
 });
 
 /* Event emitted when a pending kue job has failed with no further attempts left. */
 jobs.on('job failed', function(id, errorMsg) {
-  console.log('Job ' + id + ' failed all attempts on queue');
+  console.log('Job ' + id + ' failed all attempts on queue.');
   kue.Job.get(id, function(err, job) {
-    if (err) { return; }
+    if (err) { console.error(err); return; }
 
     // Send the result back to the email sender.
     // Email balik hasil nya ke pengirim email.
     if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, errorMsg); }
   });
 });
+
+// RENE Microservice Instance
+//var rene = new CpsRene(config.cpsReneOptions);
+//var reneSrv = rene.service;
+var reneSrv = spdy.client({ host: '127.0.0.1', port: 6001 });
+if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targets === 'object') {
+  Object.keys(config.cpsReneOptions.targets).forEach(function(target, idx) {
+    // Route graft jobs to relevant microservice
+    graft.where({ systemId: target }, reneSrv);
+    // Register event handler such that pending kue job will be processed
+    jobs.process(target, 1, processGraftJob);
+  });
+}
+
+// Accurate Microservice Instance
+//var accurate = new CpsAccurate(config.cpsAccurateOptions);
+//var accurateSrv = accurate.service;
+var accurateSrv = spdy.client({ host: '127.0.0.1', port: 6002 });
+if (config.cpsAccurateOptions.targets !== null && typeof config.cpsAccurateOptions.targets === 'object') {
+  Object.keys(config.cpsAccurateOptions.targets).forEach(function(target, idx) {
+    // Route graft jobs to relevant microservice
+    graft.where({ systemId: target }, accurateSrv);
+    // Register event handler such that pending kue job will be processed
+    jobs.process(target, 1, processGraftJob);
+  });
+}
 
 console.log("Ready to process graft jobs.");
