@@ -1,7 +1,9 @@
 var kue = require('kue');
+var cluster = require('cluster');
 
 var graft = require('graft')();
-var spdy = require('graft/spdy');
+var spdy = require('graft/spdy');  // Buggy ByteStream on Windows
+var ws = require('graft/ws');  // ByteStream Ok on Windows
 
 var fs = require('fs');
 var path = require('path');
@@ -9,14 +11,11 @@ var zlib = require('zlib');
 var domain = require('domain');
 
 var Mailer = require('./lib/mailer');
-var CpsRene = require('./lib/cps-rene');
-var CpsAccurate = require('./lib/cps-accurate');
-
 
 /* Config-variables */
 
 var config = require('./config');
-
+var clusterWorkerSize = 1;
 
 /* System variables */
 
@@ -25,118 +24,178 @@ var mailout = new Mailer(config.mailoutOptions);
 
 // Mailin will store jobs to Microservices (retry with backoff)
 var jobs = kue.createQueue({ redis: config.redisOptions });
-jobs.on('error', function(err) { console.warn(err); });  // Must be bound or will crash
+jobs.on('error', function(err) { console.log( 'Oops... ', err ); });  // Must be bound or will crash
+process.once( 'uncaughtException', function(err){
+  console.error( 'Something bad happened: ', err );
+  jobs.shutdown( 1000, function(err2){
+    console.error( 'Kue shutdown result: ', err||'OK' );
+    process.exit( 0 );
+  });
+});
 
-/* Event emitted when a pending kue job needs to be processed. */
-var processGraftJob = function processGraftJob(job, ctx, done) {
-   console.log('Job ' + job.id + ' processing...');
-  //d.run(function() {
-    // Get persisted graftMessage from job data
-    var msg = job.data.graftMessage;
-    if (msg) { job.progress(1, 8); }
-  
-    // Convert filePaths into filestreams that can be sent via graft jschan
-    if (msg.filePaths) {
-      var fileStreams = {};
-      msg.filePaths.forEach(function(filePath) {
-        var fileName = path.basename(filePath);
-        var fileStream = fs.createReadStream(filePath);
+// Build job processing function with seperate graft streams (so they don't block on each other)
+var buildProcessGraftJob = function(graft) {
+  /* Function called when a pending kue job needs to be processed. */
+  return (function processGraftJob(job, ctx, done) {
+    console.log("Job %d processing...", job.id);
 
-        fileStreams[fileName] = fileStream;
-        job.progress(2, 8, 'files-some-ready');
-        job.log("File ready: " + fileName);
-      });
-      msg.fileStreams = fileStreams;
-      job.progress(3, 8, 'files-all-ready');
-    }
-
-    // Reply from microservice (Warning: might not receive any reply on returnChannel)
-    var results = [];
-    var isError = false;
-    msg.returnChannel = graft.ReadChannel().on('data', function (msg) {
-      console.dir(msg);
-      job.progress(6, 8, 'channel-returning-data');
-      
-      if (msg.error) { isError = true; done(msg.error); }
-      else if (msg.result) { results.push(msg.result); job.log(msg.result); }
-
-    }).on('end', function() {
-      job.progress(7, 8, 'channel-ended');
-      job.log("Microservice responded with " + results.length + " results.");
-
-      if (!isError && results.length === 0) {
-        done(new Error("Graft returnChannel ended with no results. Likely timeout issue."));
-        return;
-      }
-      done(null, results);
+    var d = domain.create();
+    d.on('error', function(err) {
+      done(err);
     });
 
-    // Send Request to microservices
-    job.progress(4, 8, 'request-sending');
-    job.log("Sending request to graft microservice");
-    graft.write(msg);  // Note: Request message dispatched by graft.where() pattern-matching
-    job.progress(5, 8, 'request-sent');
-    job.log("Sent request to graft microservice");
-  //});
+    d.run(function() {
+      // Get persisted graftMessage from job data
+      var msg = job.data.graftMessage;
+      if (msg) { job.progress(1, 8); }
+  
+      // Convert filePaths into filestreams that can be sent via graft jschan
+      if (msg.filePaths) {
+        var fileStreams = {};
+        msg.filePaths.forEach(function(filePath) {
+          var fileName = path.basename(filePath);
+          var fileStream = fs.createReadStream(filePath);
+
+          fileStream.on('open', function() { console.log('open event in origin file'); });
+          fileStream.on('error', function() { console.log('error event in origin file'); });
+          fileStream.on('end', function() { console.log('end event in origin file'); });
+          fileStream.on('close', function() { console.log('close event in origin file'); });
+          //fileStream.push(null);
+
+          fileStreams[fileName] = fileStream;
+          job.progress(2, 8, 'files-some-ready');
+          job.log("File ready: %s", fileName);
+        });
+        msg.fileStreams = fileStreams;
+        job.progress(3, 8, 'files-all-ready');
+      }
+
+      // Reply from microservice (Warning: might not receive any reply on returnChannel)
+      var results = [];
+      var isError = false;
+      msg.returnChannel = graft.ReadChannel().on('data', function (msg) {
+        console.dir(msg);
+        job.progress(6, 8, 'channel-returning-data');
+      
+        if (msg.error) {
+          isError = true;
+          done(msg.error);
+        } else if ('log' in msg) {
+          if ( Array.isArray(msg.log) ) {
+            job.log.apply(job, msg.log); 
+          } else if ('length' in msg.log ) {
+            job.log.apply(job, Array.prototype.slice.call(msg.log));
+          }
+        } else if ('result' in msg) {
+          results.push(msg.result);
+          job.log("Result: %s", JSON.stringify(msg.result) );
+        }
+
+      }).on('end', function() {
+        job.progress(7, 8, 'channel-ended');
+        job.log("Microservice response ended with %d results.", results.length);
+
+        if (!isError) {
+          if (results.length === 0) {
+            done(new Error("Graft returnChannel ended with no results. Likely timeout issue."));
+          } else {
+            done(null, results);
+          }
+        }
+      });
+
+      // Send Request to microservices
+      job.progress(4, 8, 'request-sending');
+      job.log("Sending request to Microservice");
+      graft.write(msg);  // Note: Request message dispatched by graft.where() pattern-matching
+      job.progress(5, 8, 'request-sent');
+      job.log("Sent request to Microservice");
+    });
+  });
 };
 
-/* Event emitted when a pending kue job has completed. */
-jobs.on('job complete', function(id, result) {
-  console.log('Job ' + id + ' completed.');
-  kue.Job.get(id, function(err, job) {
-    if (err) { console.error(err); return; }
+if (cluster.isMaster) {
+  /* Master Logic */
+  
+  /* Event emitted when a pending kue job has completed. */
+  jobs.on('job complete', function(id, result) {
+    console.log("Job %d completed.", id);
+    kue.Job.get(id, function(err, job) {
+      if (err) { console.error(err); return; }
 
-    // Store the result in Kue db
-    //job.data.success = true;
-    //job.set('data', JSON.stringify(job.data));
+      // Store the result in Kue db
+      //job.data.success = true;
+      //job.set('data', JSON.stringify(job.data));
 
-    // Send the result back to the email sender.
-    // Email balik hasil nya ke pengirim email.
-    if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, result); }
+      // Send the result back to the email sender.
+      // Email balik hasil nya ke pengirim email.
+      if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, result); }
+    });
   });
-});
 
-/* Event emitted when a pending kue job has failed an attempt. */
-jobs.on('job failed attempt', function(id, errorMsg, attempts) {
-  console.log('Job ' + id + ' failed attempt ' + attempts + ' on queue...');
-});
+  /* Event emitted when a pending kue job has failed an attempt. */
+  //jobs.on('job failed attempt', function(id, errorMsg, attempts) {});
+  //  console.log("Job %d failed attempt %d on queue...", id, attempts);
+  //});
 
-/* Event emitted when a pending kue job has failed with no further attempts left. */
-jobs.on('job failed', function(id, errorMsg) {
-  console.log('Job ' + id + ' failed all attempts on queue.');
-  kue.Job.get(id, function(err, job) {
-    if (err) { console.error(err); return; }
+  /* Event emitted when a pending kue job has failed with no further attempts left. */
+  jobs.on('job failed', function(id, errorMsg) {
+    console.log("Job %d failed all attempts on queue.", id);
+    kue.Job.get(id, function(err, job) {
+      if (err) { console.error(err); return; }
 
-    // Send the result back to the email sender.
-    // Email balik hasil nya ke pengirim email.
-    if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, errorMsg); }
+      // Send the result back to the email sender.
+      // Email balik hasil nya ke pengirim email.
+      if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, errorMsg); }
+    });
   });
-});
 
-// RENE Microservice Instance
-//var rene = new CpsRene(config.cpsReneOptions);
-//var reneSrv = rene.service;
-var reneSrv = spdy.client({ host: '10.0.4.15', port: 6001, reconnectTimeout: 10000 });
-if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targets === 'object') {
-  Object.keys(config.cpsReneOptions.targets).forEach(function(target, idx) {
-    // Route graft jobs to relevant microservice
-    graft.where({ systemId: target }, reneSrv);
-    // Register event handler such that pending kue job will be processed
-    jobs.process(target, 1, processGraftJob);
+  // Fork workers in cluster that will process jobs
+  for (var i = 0; i < clusterWorkerSize; i++) {
+    cluster.fork();
+  }
+
+  // Recover all stuck active jobs
+  jobs.active( function( err, ids ) {
+    ids.forEach( function( id ) {
+      kue.Job.get( id, function( err, job ) {
+        // Your application should check if job is a stuck one
+        job.inactive();
+      });
+    });
   });
+
+} else {
+  /* Worker Logic */
+  var processGraftJob = buildProcessGraftJob(graft);
+
+  // RENE Microservice Instance
+  var CpsRene = require('./lib/cps-rene');
+  var rene = new CpsRene(config.cpsReneOptions);
+  var reneSrv = rene.getService();
+  //var reneSrv = ws.client({ host: '10.0.4.15', port: 6001, reconnectTimeout: 1000 });
+  if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targets === 'object') {
+    Object.keys(config.cpsReneOptions.targets).forEach(function(target, idx) {
+      // Route graft jobs to relevant microservice
+      graft.where({ systemId: target }, reneSrv);
+      // Register event handler such that pending kue job will be processed
+      jobs.process(target, 1, processGraftJob);
+    });
+  }
+
+  // Accurate Microservice Instance
+  //var CpsAccurate = require('./lib/cps-accurate');
+  //var accurate = new CpsAccurate(config.cpsAccurateOptions);
+  //var accurateSrv = accurate.getService();
+  var accurateSrv = ws.client({ host: '10.0.4.15', port: 6002, reconnectTimeout: 1000 });
+  if (config.cpsAccurateOptions.targets !== null && typeof config.cpsAccurateOptions.targets === 'object') {
+    Object.keys(config.cpsAccurateOptions.targets).forEach(function(target, idx) {
+      // Route graft jobs to relevant microservice
+      graft.where({ systemId: target }, accurateSrv);
+      // Register event handler such that pending kue job will be processed
+      jobs.process(target, 1, processGraftJob);
+    });
+  }
+
+  console.log("Worker %s ready to process graft jobs.", cluster.worker.id);
 }
-
-// Accurate Microservice Instance
-//var accurate = new CpsAccurate(config.cpsAccurateOptions);
-//var accurateSrv = accurate.service;
-var accurateSrv = spdy.client({ host: '10.0.4.15', port: 6002, reconnectTimeout: 10000 });
-if (config.cpsAccurateOptions.targets !== null && typeof config.cpsAccurateOptions.targets === 'object') {
-  Object.keys(config.cpsAccurateOptions.targets).forEach(function(target, idx) {
-    // Route graft jobs to relevant microservice
-    graft.where({ systemId: target }, accurateSrv);
-    // Register event handler such that pending kue job will be processed
-    jobs.process(target, 1, processGraftJob);
-  });
-}
-
-console.log("Ready to process graft jobs.");

@@ -6,6 +6,9 @@ var config = require('./config');
 var jobs = kue.createQueue({ redis: config.redisOptions });
 jobs.on('error', function(err) { console.warn(err); });  // Must be bound or will crash
 
+// Watchdog: Fix stuck inactive jobs (if any)
+jobs.watchStuckJobs()
+
 /* Start the Kue Web UI */
 kue.app.set('title', 'Mailin Job Queue');
 kue.app.listen(3000);
