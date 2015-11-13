@@ -11,5 +11,5 @@ jobs.watchStuckJobs()
 
 /* Start the Kue Web UI */
 kue.app.set('title', 'Mailin Job Queue');
-kue.app.listen(3000);
-console.log('Kue UI started on port 3000');
+kue.app.listen(8000);
+console.log('Kue UI started on port 8000');

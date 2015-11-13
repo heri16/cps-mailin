@@ -1,6 +1,7 @@
 var kue = require('kue');
 var cluster = require('cluster');
 
+var through2 = require('through2');
 var graft = require('graft')();
 var spdy = require('graft/spdy');  // Buggy ByteStream on Windows
 var ws = require('graft/ws');  // ByteStream Ok on Windows
@@ -26,9 +27,9 @@ var mailout = new Mailer(config.mailoutOptions);
 var jobs = kue.createQueue({ redis: config.redisOptions });
 jobs.on('error', function(err) { console.log( 'Oops... ', err ); });  // Must be bound or will crash
 process.once( 'uncaughtException', function(err){
-  console.error( 'Something bad happened: ', err );
+  console.error( 'Something bad happened, uncaughtException:', err );
   jobs.shutdown( 1000, function(err2){
-    console.error( 'Kue shutdown result: ', err||'OK' );
+    console.error( 'Kue shutdown result: ', err2||'OK' );
     process.exit( 0 );
   });
 });
@@ -73,7 +74,8 @@ var buildProcessGraftJob = function(graft) {
       // Reply from microservice (Warning: might not receive any reply on returnChannel)
       var results = [];
       var isError = false;
-      msg.returnChannel = graft.ReadChannel().on('data', function (msg) {
+      msg.returnChannel = graft.ReadChannel();
+      msg.returnChannel.pipe(through2.obj(function(msg, enc, cb) {
         console.dir(msg);
         job.progress(6, 8, 'channel-returning-data');
       
@@ -91,7 +93,9 @@ var buildProcessGraftJob = function(graft) {
           job.log("Result: %s", JSON.stringify(msg.result) );
         }
 
-      }).on('end', function() {
+        cb();
+      }));
+      msg.returnChannel.on('unpipe', function() {
         job.progress(7, 8, 'channel-ended');
         job.log("Microservice response ended with %d results.", results.length);
 
@@ -129,13 +133,14 @@ if (cluster.isMaster) {
 
       // Send the result back to the email sender.
       // Email balik hasil nya ke pengirim email.
-      if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, result); }
+      if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, "Job " + job.id + " Completed: \n" + result); }
     });
   });
 
   /* Event emitted when a pending kue job has failed an attempt. */
   //jobs.on('job failed attempt', function(id, errorMsg, attempts) {});
   //  console.log("Job %d failed attempt %d on queue...", id, attempts);
+  //  if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, "Job " + job.id + " Retry due to: \n" + errorMsg); }
   //});
 
   /* Event emitted when a pending kue job has failed with no further attempts left. */
@@ -146,7 +151,7 @@ if (cluster.isMaster) {
 
       // Send the result back to the email sender.
       // Email balik hasil nya ke pengirim email.
-      if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, errorMsg); }
+      if (job.data.sourceMail) { mailout.replyToEmail(job.data.sourceMail, "Job " + job.id + " Failed: \n" + errorMsg); }
     });
   });
 
@@ -170,16 +175,41 @@ if (cluster.isMaster) {
   var processGraftJob = buildProcessGraftJob(graft);
 
   // RENE Microservice Instance
-  var CpsRene = require('./lib/cps-rene');
-  var rene = new CpsRene(config.cpsReneOptions);
-  var reneSrv = rene.getService();
-  //var reneSrv = ws.client({ host: '10.0.4.15', port: 6001, reconnectTimeout: 1000 });
+  //var CpsRene = require('./lib/cps-rene');
+  //var rene = new CpsRene(config.cpsReneOptions);
+  //var reneSrv = rene.getService();
+  
+  var reneSrv = ws.client({ host: '10.0.4.15', port: 6001, reconnectTimeout: 1000 });
+  reneSrv.on('ready', function() { console.log("ready event on rene microservice"); });
+  reneSrv.session.on('error', function() { console.log("error event on rene microservice"); });
+  reneSrv.session.on('close', function() { console.log("close event on rene microservice"); });
+
   if (config.cpsReneOptions.targets !== null && typeof config.cpsReneOptions.targets === 'object') {
     Object.keys(config.cpsReneOptions.targets).forEach(function(target, idx) {
       // Route graft jobs to relevant microservice
       graft.where({ systemId: target }, reneSrv);
       // Register event handler such that pending kue job will be processed
-      jobs.process(target, 1, processGraftJob);
+      reneSrv.once('ready', function() {
+        jobs.process(target, 1, function(job, ctx, done) {
+          if (!ctx.isMicroservicePauseBinded && reneSrv.session) {
+            var resume = function() { console.log("resuming %s", target); ctx.resume(); };
+            var pause = function() { console.log("pausing %s", target); reneSrv.once('ready', resume); ctx.pause(); };
+
+            reneSrv.session.on('error', pause);
+            reneSrv.session.on('close', pause);
+            ctx.isMicroservicePauseBinded = true;
+          }
+
+          if (Object.keys(job.data).length > 1) {
+            processGraftJob(job, ctx, done);
+          } else {
+            done();
+          }
+        });
+
+        // Create initial job to initialize worker context
+        jobs.create(target, { title: "Ready" }).save();
+      });
     });
   }
 
@@ -187,13 +217,38 @@ if (cluster.isMaster) {
   //var CpsAccurate = require('./lib/cps-accurate');
   //var accurate = new CpsAccurate(config.cpsAccurateOptions);
   //var accurateSrv = accurate.getService();
+
   var accurateSrv = ws.client({ host: '10.0.4.15', port: 6002, reconnectTimeout: 1000 });
+  accurateSrv.on('ready', function() { console.log("ready event on accurate microservice"); });
+  accurateSrv.session.on('error', function() { console.log("error event on accurate microservice"); });
+  accurateSrv.session.on('close', function() { console.log("close event on accurate microservice"); });
+
   if (config.cpsAccurateOptions.targets !== null && typeof config.cpsAccurateOptions.targets === 'object') {
     Object.keys(config.cpsAccurateOptions.targets).forEach(function(target, idx) {
       // Route graft jobs to relevant microservice
       graft.where({ systemId: target }, accurateSrv);
       // Register event handler such that pending kue job will be processed
-      jobs.process(target, 1, processGraftJob);
+      accurateSrv.once('ready', function() {
+        jobs.process(target, 1, function(job, ctx, done) {
+          if (!ctx.isMicroservicePauseBinded && accurateSrv.session) {
+            var resume = function() { console.log("resuming %s", target); ctx.resume(); };
+            var pause = function() { console.log("pausing %s", target); accurateSrv.once('ready', resume); ctx.pause(); };
+
+            accurateSrv.session.on('error', pause);
+            accurateSrv.session.on('close', pause);
+            ctx.isMicroservicePauseBinded = true;
+          }
+
+          if (Object.keys(job.data).length > 1) {
+            processGraftJob(job, ctx, done);
+          } else {
+            done();
+          }
+        });
+
+        // Create initial job to initialize worker context
+        jobs.create(target, { title: "Ready" }).save();
+      });
     });
   }
 
